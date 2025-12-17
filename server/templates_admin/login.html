@@ -1,0 +1,28 @@
+<!doctype html>
+<html>
+<head>
+  <meta charset="utf-8">
+  <title>RoadState Admin Login</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <style>
+    body{font-family:system-ui;margin:0;padding:24px;background:#0b0f16;color:#e7eefc}
+    .card{max-width:420px;margin:0 auto;background:#121a28;border:1px solid rgba(255,255,255,.08);border-radius:14px;padding:18px}
+    input,button{width:100%;padding:12px;border-radius:10px;border:1px solid rgba(255,255,255,.14);background:#0b0f16;color:#e7eefc}
+    button{cursor:pointer;background:#2a6df4;border:none;margin-top:10px}
+    .err{color:#ffb4b4;margin-top:10px}
+  </style>
+</head>
+<body>
+  <div class="card">
+    <h2>Admin Login</h2>
+    <form method="post" action="/admin/login">
+      <label>Username</label>
+      <input name="username" autocomplete="username" required>
+      <label style="margin-top:10px;display:block">Password</label>
+      <input name="password" type="password" autocomplete="current-password" required>
+      <button type="submit">Login</button>
+      {% if error %}<div class="err">{{ error }}</div>{% endif %}
+    </form>
+  </div>
+</body>
+</html>

@@ -1,10 +1,14 @@
 <!doctype html>
 <html lang="en">
 <head>
+  <meta http-equiv="Cache-Control" content="no-store, no-cache, must-revalidate, max-age=0" />
+  <meta http-equiv="Pragma" content="no-cache" />
+  <meta http-equiv="Expires" content="0" />
+
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
   <title>Project Road 70 • v0.1.0</title>
-  <link rel="stylesheet" href="/styles.css" />
+  <link rel="stylesheet" href="/styles.css?v=1765952842" />
 </head>
 <body>
   <div class="wrap">
@@ -23,7 +27,9 @@
     <section class="grid">
       <div class="card">
         <h2>Live</h2>
-        <div class="kv"><span>Status</span><span id="status">Idle</span></div>
+        <div class="kv"><span>Status</span><span id="status">Idle</span>
+        <span id="eligBadge" class="badge warn" title="Eligibility for scoring"></span>
+</div>
         <div class="kv"><span>Speed</span><span id="speed">—</span></div>
         <div class="kv"><span>Grid</span><span id="gridKey">—</span></div>
         <div class="kv"><span>Confidence</span><span id="conf">—</span></div>
@@ -46,6 +52,29 @@
       </div>
     </section>
 
+
+    <section class="card">
+      <h2>Live Sensors</h2>
+      <pre id="liveSensors" class="log">Waiting…</pre>
+      <p class="muted tiny">If this stays stuck, iOS isn’t sending motion events.</p>
+    </section>
+
+    <section class="card">
+      <h2>Send Status</h2>
+      <div class="kv">
+        <div class="muted">State</div>
+        <div><span id="sendState" class="pill idle">Idle</span></div>
+      </div>
+      <div class="kv">
+        <div class="muted">Last sent</div>
+        <div id="lastSent" class="mono">-</div>
+      </div>
+      <div class="kv">
+        <div class="muted">Last error</div>
+        <div id="lastErr" class="mono">-</div>
+      </div>
+      <p class="muted tiny">Auto-sends while driving (every 5s). Use “Send Now” only for testing.</p>
+    </section>
     <section class="card">
       <h2>Last Upload</h2>
       <pre id="lastUpload" class="log">None yet.</pre>
@@ -55,6 +84,6 @@
     </section>
   </div>
 
-  <script src="/app.js"></script>
+  <script src="/app.js?v=1765952842"></script>
 </body>
 </html>

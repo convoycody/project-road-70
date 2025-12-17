@@ -1,0 +1,96 @@
+<!doctype html>
+<html>
+<head>
+  <meta charset="utf-8">
+  <title>RoadState Admin</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <style>
+    body{font-family:system-ui;margin:0;padding:18px;background:#0b0f16;color:#e7eefc}
+    a{color:#8fb7ff}
+    .top{display:flex;gap:10px;flex-wrap:wrap;align-items:center;justify-content:space-between;margin-bottom:12px}
+    .card{background:#121a28;border:1px solid rgba(255,255,255,.08);border-radius:14px;padding:12px}
+    table{width:100%;border-collapse:collapse;font-size:13px}
+    th,td{padding:8px;border-bottom:1px solid rgba(255,255,255,.08);vertical-align:top}
+    th{color:#bcd1ff;text-align:left}
+    input{padding:8px;border-radius:10px;border:1px solid rgba(255,255,255,.14);background:#0b0f16;color:#e7eefc}
+    .btn{padding:8px 10px;border-radius:10px;border:none;cursor:pointer}
+    .save{background:#2a6df4;color:white}
+    .del{background:#ff4d4d;color:white}
+    .muted{color:#9fb2d6}
+    .pill{display:inline-block;padding:3px 8px;border:1px solid rgba(255,255,255,.14);border-radius:999px;margin-right:6px}
+  </style>
+</head>
+<body>
+  <div class="top">
+    <div class="card">
+      <strong>RoadState Admin</strong>
+      <div class="muted">Edit/delete rows, and override road names/short location.</div>
+    </div>
+    <div class="card">
+      <form method="get" action="/admin" style="display:flex;gap:8px;align-items:center;flex-wrap:wrap">
+        <input name="q" value="{{ q }}" placeholder="search node/road/location/note">
+        <input name="limit" value="{{ limit }}" style="width:90px">
+        <button class="btn save" type="submit">Filter</button>
+      </form>
+      <form method="post" action="/admin/logout" style="margin-top:8px">
+        <button class="btn" type="submit">Logout</button>
+      </form>
+    </div>
+  </div>
+
+  <div class="card">
+    <table>
+      <thead>
+        <tr>
+          <th>ID</th><th>Time</th><th>Node</th>
+          <th>Location</th><th>Speed</th>
+          <th>Conf</th><th>Elig</th><th>Mount</th>
+          <th>Notes</th><th>Actions</th>
+        </tr>
+      </thead>
+      <tbody>
+      {% for r in rows %}
+        <tr>
+          <td>{{ r["id"] }}</td>
+          <td class="muted">{{ r["received_at"] }}</td>
+          <td>{{ r["node_id"] }}</td>
+          <td>
+            <div class="pill">{{ r["short_location"] or "-" }}</div>
+            <div class="muted" style="margin-top:6px">{{ r["road_name"] or "-" }}</div>
+            <div class="muted" style="margin-top:6px">{{ r["lat"] or "-" }}, {{ r["lon"] or "-" }}</div>
+          </td>
+          <td>
+            {% if r["speed_mps"] %}
+              {{ "%.2f"|format(r["speed_mps"]) }} m/s<br>
+              <span class="muted">{{ "%.1f"|format(r["speed_mps"]*2.236936) }} mph</span>
+            {% else %}-{% endif %}
+            <div class="muted" style="margin-top:6px">hdg: {{ r["heading_deg"] or "-" }}</div>
+          </td>
+          <td>{{ r["confidence"] or "-" }}</td>
+          <td>
+            <span class="pill">A: {{ r["analyzable"] }}</span>
+            <span class="pill">P: {{ r["points_eligible"] }}</span>
+            <div class="muted" style="margin-top:6px">moving: {{ r["moving"] }}</div>
+          </td>
+          <td>{{ r["mount_state"] or "-" }}</td>
+          <td class="muted">{{ r["quality_note"] or "-" }}</td>
+          <td>
+            <form method="post" action="/admin/row/{{ r["id"] }}/update" style="display:flex;gap:6px;flex-wrap:wrap;margin-bottom:8px">
+              <input name="analyzable" value="{{ r['analyzable'] }}" style="width:58px" />
+              <input name="points_eligible" value="{{ r['points_eligible'] }}" style="width:58px" />
+              <input name="road_name" value="{{ r['road_name'] or '' }}" placeholder="road" style="min-width:140px" />
+              <input name="short_location" value="{{ r['short_location'] or '' }}" placeholder="short location" style="min-width:180px" />
+              <input name="quality_note" value="{{ r['quality_note'] or '' }}" placeholder="note" style="min-width:160px" />
+              <button class="btn save" type="submit">Save</button>
+            </form>
+            <form method="post" action="/admin/row/{{ r["id"] }}/delete" onsubmit="return confirm('Delete row {{ r["id"] }}?');">
+              <button class="btn del" type="submit">Delete</button>
+            </form>
+          </td>
+        </tr>
+      {% endfor %}
+      </tbody>
+    </table>
+  </div>
+</body>
+</html>

@@ -1,0 +1,86 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Project Road 70 • Map</title>
+  <link rel="stylesheet" href="/styles.css" />
+  <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
+  <style>
+    #map { height: 70vh; border-radius: 14px; border: 1px solid rgba(255,255,255,.12); overflow:hidden; }
+    .pill { display:inline-block; padding:6px 10px; border-radius:999px; background:rgba(255,255,255,.08); border:1px solid rgba(255,255,255,.12); font-size:12px; }
+  </style>
+</head>
+<body>
+  <div class="wrap">
+    <header class="card">
+      <h1 style="margin:0 0 6px 0;">Map</h1>
+      <p class="muted">Latest points (aggregates) • colored by roughness • filtered by analyzable</p>
+      <div class="row">
+        <a class="btn" href="/">Home</a>
+        <a class="btn" href="/admin">Admin</a>
+        <span class="pill" id="meta">Loading…</span>
+      </div>
+    </header>
+
+    <section class="card">
+      <div id="map"></div>
+      <p class="muted tiny" style="margin-top:10px;">
+        Opt-in contributor aggregates only. No raw trails. No license plate data. No identifying vehicle data.
+      </p>
+    </section>
+  </div>
+
+  <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+  <script>
+    const map = L.map("map").setView([39.9784, -86.1180], 10);
+    L.tileLayer("https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png", {
+      maxZoom: 19,
+      attribution: "&copy; OpenStreetMap contributors"
+    }).addTo(map);
+
+    function colorForRough(rough) {
+      if (rough == null) return "#9aa4b2";
+      const r = Math.max(0, Math.min(4, rough));
+      const t = r / 4.0;
+      const R = Math.round(40 + 200*t);
+      const G = Math.round(220 - 160*t);
+      const B = Math.round(80 - 50*t);
+      return `rgb(${R},${G},${B})`;
+    }
+
+    async function load() {
+      const res = await fetch("/v1/map/latest?limit=2000");
+      const pts = await res.json();
+
+      let count = 0;
+      const bounds = [];
+      for (const p of pts) {
+        if (!p.analyzable) continue;
+        if (typeof p.lat !== "number" || typeof p.lon !== "number") continue;
+
+        const c = colorForRough(p.rough);
+        const marker = L.circleMarker([p.lat, p.lon], {
+          radius: 6, color: c, fillColor: c, fillOpacity: 0.75, weight: 1
+        }).addTo(map);
+
+        marker.bindPopup(
+          `<b>${p.grid_key}</b><br>` +
+          `rough: ${p.rough ?? ""}<br>` +
+          `shocks: ${p.shocks ?? ""}<br>` +
+          `conf: ${p.conf ?? ""}<br>` +
+          `t: ${p.bucket_start}`
+        );
+
+        bounds.push([p.lat, p.lon]);
+        count++;
+      }
+
+      document.getElementById("meta").textContent = `${count} analyzable points`;
+      if (bounds.length) map.fitBounds(bounds, { padding: [20, 20] });
+    }
+
+    load().catch(err => document.getElementById("meta").textContent = String(err));
+  </script>
+</body>
+</html>

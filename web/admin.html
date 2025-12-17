@@ -1,0 +1,130 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width,initial-scale=1" />
+  <title>Project Road 70 - Admin</title>
+  <style>
+    :root{
+      --bg:#0b1220;
+      --panel:#0f1a2e;
+      --panel2:#0c1526;
+      --text:#e6eefc;
+      --muted:#9fb1d6;
+      --line:#1c2a45;
+      --accent:#69a7ff;
+      --good:#35d07f;
+      --bad:#ff5f5f;
+    }
+    html,body{height:100%;margin:0;background:var(--bg);color:var(--text);font-family:ui-sans-serif,system-ui,-apple-system,Segoe UI,Roboto,Helvetica,Arial;}
+    a{color:var(--accent);text-decoration:none}
+    .wrap{max-width:1200px;margin:24px auto;padding:0 16px;}
+    .top{
+      display:flex;gap:12px;align-items:center;justify-content:space-between;
+      background:linear-gradient(180deg,var(--panel),var(--panel2));
+      border:1px solid var(--line); border-radius:16px; padding:14px 16px;
+      box-shadow: 0 10px 30px rgba(0,0,0,.35);
+    }
+    .title{font-size:18px;font-weight:700}
+    .sub{color:var(--muted);font-size:13px;margin-top:4px}
+    .controls{display:flex;gap:10px;align-items:center;flex-wrap:wrap}
+    button{
+      background:rgba(105,167,255,.14);
+      color:var(--text);
+      border:1px solid rgba(105,167,255,.35);
+      padding:9px 12px;border-radius:12px;
+      cursor:pointer;font-weight:600;
+    }
+    button:hover{background:rgba(105,167,255,.22)}
+    input{
+      background:rgba(255,255,255,.04);
+      color:var(--text);
+      border:1px solid var(--line);
+      padding:9px 12px;border-radius:12px;
+      outline:none;
+    }
+    .card{
+      margin-top:14px;
+      background:linear-gradient(180deg,var(--panel),var(--panel2));
+      border:1px solid var(--line); border-radius:16px;
+      overflow:hidden;
+      box-shadow: 0 10px 30px rgba(0,0,0,.35);
+    }
+    table{width:100%;border-collapse:collapse}
+    th,td{padding:10px 12px;border-bottom:1px solid var(--line);font-size:13px;vertical-align:top}
+    th{color:var(--muted);font-weight:700;text-align:left;background:rgba(0,0,0,.18)}
+    tr:hover td{background:rgba(255,255,255,.03)}
+    .pill{display:inline-block;padding:2px 8px;border-radius:999px;border:1px solid var(--line);font-size:12px;color:var(--muted)}
+    .pill.good{color:var(--good);border-color:rgba(53,208,127,.35);background:rgba(53,208,127,.08)}
+    .pill.bad{color:var(--bad);border-color:rgba(255,95,95,.35);background:rgba(255,95,95,.08)}
+    .mono{font-family:ui-monospace,SFMono-Regular,Menlo,Monaco,Consolas,monospace}
+  </style>
+</head>
+<body>
+<div class="wrap">
+  <div class="top">
+    <div>
+      <div class="title">Project Road 70 - Admin</div>
+      <div class="sub">Latest aggregates. Includes road_name + short_location when available.</div>
+    </div>
+    <div class="controls">
+      <input id="limit" type="number" min="10" max="2000" value="200" />
+      <button onclick="loadRows()">Refresh</button>
+    </div>
+  </div>
+
+  <div class="card">
+    <table>
+      <thead>
+        <tr>
+          <th>ID</th>
+          <th>received_at</th>
+          <th>node</th>
+          <th>lat</th>
+          <th>lon</th>
+          <th>speed_mps</th>
+          <th>heading</th>
+          <th>confidence</th>
+          <th>moving</th>
+          <th>mount_state</th>
+          <th>road_name</th>
+          <th>short_location</th>
+          <th>quality_note</th>
+        </tr>
+      </thead>
+      <tbody id="tbody"></tbody>
+    </table>
+  </div>
+</div>
+
+<script>
+async function loadRows(){
+  const lim = parseInt(document.getElementById('limit').value || '200', 10);
+  const r = await fetch(`/admin/data?limit=${encodeURIComponent(lim)}`);
+  const j = await r.json();
+  const tb = document.getElementById('tbody');
+  tb.innerHTML = '';
+  for (const row of j.rows){
+    const tr = document.createElement('tr');
+    tr.innerHTML = `
+      <td class="mono">${row.id ?? ''}</td>
+      <td class="mono">${row.received_at ?? ''}</td>
+      <td>${row.node_id ?? ''}</td>
+      <td class="mono">${row.lat ?? ''}</td>
+      <td class="mono">${row.lon ?? ''}</td>
+      <td class="mono">${row.speed_mps ?? ''}</td>
+      <td class="mono">${row.heading_deg ?? ''}</td>
+      <td class="mono">${row.confidence ?? ''}</td>
+      <td>${row.moving ? '<span class="pill good">moving</span>' : '<span class="pill">still</span>'}</td>
+      <td>${row.mount_state ?? ''}</td>
+      <td>${row.road_name ?? ''}</td>
+      <td>${row.short_location ?? ''}</td>
+      <td>${row.quality_note ?? ''}</td>
+    `;
+    tb.appendChild(tr);
+  }
+}
+loadRows();
+</script>
+</body>
+</html>

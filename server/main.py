@@ -1,13 +1,44 @@
 from __future__ import annotations
 
+
+
+def _sanitize_lat_lon(d: dict) -> None:
+    # Convert and validate lat/lon; if suspicious, null them and note why.
+    def _f(x):
+        if x is None or x == "": return None
+        try: return float(x)
+        except Exception: return None
+
+    lat = _f(d.get("lat"))
+    lon = _f(d.get("lon"))
+
+    bad = []
+    if lat is not None and abs(lat) > 90: bad.append("lat_out_of_range")
+    if lon is not None and abs(lon) > 180: bad.append("lon_out_of_range")
+
+    # patterns we've seen in your DB
+    if lat is not None and lon is not None:
+        if abs(lon) < 1e-6 and 0 < abs(lat) < 2:
+            bad.append("lon_zero_lat_tiny")
+        # lon looks like speed, lat looks like a normalized value
+        if 0 <= abs(lon) <= 80 and 0 < abs(lat) < 2 and d.get("speed_mps") is None:
+            bad.append("lon_looks_like_speed")
+
+    if bad:
+        d["lat"] = None
+        d["lon"] = None
+        q = (d.get("quality_note") or "").strip()
+        tag = "sanity_check:" + ",".join(bad)
+        d["quality_note"] = (q + (" | " if q else "") + tag).strip()
 import os
 import sqlite3
 from datetime import datetime, timezone
 from pathlib import Path
 
-from fastapi import FastAPI, HTTPException, Request
+from fastapi import FastAPI, HTTPException, Request, Body
 from fastapi.responses import HTMLResponse
 from fastapi.staticfiles import StaticFiles
+from .ingest_named import insert_metric_aggregate
 
 APP_DIR = Path(__file__).resolve().parent
 ROOT_DIR = APP_DIR.parent
@@ -67,6 +98,30 @@ def _startup():
     if not WEB_DIR.exists():
         raise RuntimeError(f"Missing web folder at {WEB_DIR}")
 
+# 
+
+@app.get("/admin")
+def admin_page():
+    # Serve dedicated admin HTML (dark themed)
+    return HTMLResponse((WEB_DIR / "admin.html").read_text())
+
+@app.get("/admin/data")
+def admin_data(limit: int = 200):
+    limit = max(10, min(int(limit or 200), 2000))
+    con = db()
+    con.row_factory = sqlite3.Row
+    try:
+        rows = con.execute("""
+          SELECT id, received_at, node_id, lat, lon, speed_mps, heading_deg,
+                 confidence, moving, mount_state, road_name, short_location, quality_note
+          FROM metric_aggregates
+          ORDER BY id DESC
+          LIMIT ?
+        """, (limit,)).fetchall()
+        return {"rows": [dict(r) for r in rows]}
+    finally:
+        con.close()
+
 app.mount("/", StaticFiles(directory=str(WEB_DIR), html=True), name="web")
 
 @app.get("/admin", response_class=HTMLResponse)
@@ -113,51 +168,17 @@ def admin():
     </body></html>
     """)
 
-@app.post("/v1/ingest/aggregates")
-async def ingest_aggregates(request: Request):
-    require_key(request)
-    payload = await request.json()
-
-    node_id = str(payload.get("node_id", "")).strip()
-    items = payload.get("items", [])
-    if not node_id or not isinstance(items, list) or not items:
-        raise HTTPException(status_code=400, detail="Invalid payload: require node_id and items[]")
-
-    received_at = utc_now()
+async def ingest_aggregates(payload: dict = Body(...)):
     con = db()
     try:
-        inserted = 0
-        for it in items:
-            bucket_start = str(it.get("bucket_start", "")).strip()
-            bucket_seconds = int(it.get("bucket_seconds", 60))
-            grid_key = str(it.get("grid_key", "")).strip()
-            direction = str(it.get("direction", "UNK"))[:8]
-            speed_band = str(it.get("speed_band", "UNK"))[:16]
-            sample_count = int(it.get("sample_count", 0))
-
-            road_roughness = it.get("road_roughness", None)
-            shock_events = it.get("shock_events", None)
-            confidence = it.get("confidence", None)
-
-            if not bucket_start or not grid_key or sample_count <= 0:
-                continue
-
-            con.execute(
-                """
-                INSERT INTO metric_aggregates
-                (received_at, node_id, bucket_start, bucket_seconds, grid_key, direction, speed_band,
-                 road_roughness, shock_events, confidence, sample_count)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-                """,
-                (received_at, node_id, bucket_start, bucket_seconds, grid_key, direction, speed_band,
-                 road_roughness, shock_events, confidence, sample_count)
-            )
-            inserted += 1
+        rid = insert_metric_aggregate(con, payload)
         con.commit()
+        return {"ok": True, "id": rid}
+    except Exception as e:
+        con.rollback()
+        raise HTTPException(status_code=400, detail=str(e))
     finally:
         con.close()
-
-    return {"ok": True, "inserted": inserted}
 
 @app.get("/v1/latest")
 def latest(limit: int = 50):
@@ -184,3 +205,112 @@ def latest(limit: int = 50):
         }
         for r in rows
     ]
+
+
+@app.get("/health")
+async def health():
+    return {"ok": True}
+
+
+def _table_cols(con: sqlite3.Connection, table: str) -> set[str]:
+    rows = con.execute(f"PRAGMA table_info({table})").fetchall()
+    return {r[1] for r in rows}
+
+def _normalize_row(d: dict, cols: set[str]) -> dict:
+    # Accept a few aliases from client
+    aliases = {
+        "speed": "speed_mps",
+        "heading": "heading_deg",
+        "lat_deg": "lat",
+        "lon_deg": "lon",
+    }
+    out = {}
+    for k,v in (d or {}).items():
+        kk = aliases.get(k, k)
+        if kk in cols:
+            out[kk] = v
+
+    # Light sanity guards (prevents confidence->lat type disasters)
+    try:
+        if "lat" in out and out["lat"] is not None:
+            lat = float(out["lat"])
+            if abs(lat) > 90:
+                out["lat"] = None
+    except Exception:
+        out["lat"] = None
+
+    try:
+        if "lon" in out and out["lon"] is not None:
+            lon = float(out["lon"])
+            if abs(lon) > 180:
+                out["lon"] = None
+    except Exception:
+        out["lon"] = None
+
+    # If it looks like confidence got shoved into lat/lon, flag it
+    # (lat between 0..1, lon == 0, confidence exists) => likely wrong
+    try:
+        lat = float(out.get("lat")) if out.get("lat") is not None else None
+        lon = float(out.get("lon")) if out.get("lon") is not None else None
+        conf = float(out.get("confidence")) if out.get("confidence") is not None else None
+        if lat is not None and lon is not None and conf is not None:
+            if 0 <= lat <= 1.2 and lon == 0.0 and 0 <= conf <= 1.0:
+                out["analyzable"] = 0
+                q = (out.get("quality_note") or "")
+                out["quality_note"] = (q + " | sanity_check:lat_lon_suspected_from_conf").strip(" |")
+    except Exception:
+        pass
+
+    return out
+
+@app.post("/v1/ingest/aggregates")
+async def ingest_aggregates(payload: dict = Body(...), request: Request = None):
+    require_key(request)  # your existing API key gate (no-op if API_KEY empty)
+    init_db()
+
+    # Accept either {"rows":[...]} or {"aggregates":[...]} or a single row dict
+    rows = None
+    for key in ("rows","aggregates","data"):
+        if isinstance(payload.get(key), list):
+            rows = payload[key]
+            break
+    if rows is None:
+        rows = [payload]
+
+    con = db()
+    try:
+        cols = _table_cols(con, "metric_aggregates")
+        inserted = 0
+        for r in rows:
+            if not isinstance(r, dict):
+                continue
+            d = _normalize_row(r, cols)
+
+            # Required-ish defaults for older clients
+            d.setdefault("received_at", utc_now())
+            d.setdefault("node_id", "unknown")
+            d.setdefault("bucket_start", d["received_at"])
+            d.setdefault("bucket_seconds", 5)
+            d.setdefault("grid_key", "unknown")
+            d.setdefault("direction", "unknown")
+            d.setdefault("speed_band", "unknown")
+            d.setdefault("sample_count", 1)
+
+            # Build INSERT deterministically by column names present
+            keys = [k for k in d.keys() if k in cols]
+            if not keys:
+                continue
+            cols_sql = ", ".join(keys)
+            vals_sql = ", ".join([f":{k}" for k in keys])
+            sql = f"INSERT INTO metric_aggregates ({cols_sql}) VALUES ({vals_sql})"
+            con.execute(sql, d)
+            inserted += 1
+
+        con.commit()
+        return {"ok": True, "inserted": inserted}
+    finally:
+        con.close()
+
+
+## MOVED_STATIC_MOUNT (after API routes)
+app.mount("/", StaticFiles(directory=str(WEB_DIR), html=True), name="web")

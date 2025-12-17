@@ -1,289 +1,450 @@
-/* Project Road 70 v0.1.0 – iPhone Safari web app (aggregates only) */
-
+// ROADSTATE_APPJS_V=notify-motion-only-v1
 const $ = (id) => document.getElementById(id);
 
-const API_KEY = ""; // optional later: set server env API_KEY + put same here
-const BUCKET_SECONDS = 60;
-const GRID_M = 250;
-
-function clamp(x,a,b){ return Math.max(a, Math.min(b, x)); }
-function mean(arr){ return arr.length ? arr.reduce((a,b)=>a+b,0)/arr.length : 0; }
-function rms(arr){ return arr.length ? Math.sqrt(arr.reduce((a,b)=>a+b*b,0)/arr.length) : 0; }
-function std(arr){
-  if (arr.length < 2) return 0;
-  const m = mean(arr);
-  const v = mean(arr.map(x => (x-m)*(x-m)));
-  return Math.sqrt(v);
+function setText(id, val) {
+  const el = $(id);
+  if (!el) return;
+  el.textContent = (val === undefined || val === null || val === "") ? "-" : String(val);
 }
 
-function getNodeId() {
-  const k = "pr70_node_id";
-  let v = localStorage.getItem(k);
-  if (!v) {
-    v = "node_" + crypto.randomUUID();
-    localStorage.setItem(k, v);
-  }
-  return v;
-}
-const NODE_ID = getNodeId();
-
-function gridKeyFromLatLon(lat, lon, gridM) {
-  const metersPerDegLat = 111320.0;
-  const metersPerDegLon = 111320.0 * Math.cos(lat * Math.PI / 180.0);
-
-  const xM = lon * metersPerDegLon;
-  const yM = lat * metersPerDegLat;
-
-  const gx = Math.floor(xM / gridM);
-  const gy = Math.floor(yM / gridM);
-  return `g${gridM}:x${gx}:y${gy}`;
+function log(msg) {
+  const el = $("lastUpload");
+  const line = `[${new Date().toLocaleTimeString()}] ${msg}`;
+  if (el) el.textContent = line;
+  console.log(line);
 }
 
-function speedBandMph(mph) {
-  if (!isFinite(mph)) return "UNK";
-  const bands = [[0,10],[10,20],[20,30],[30,45],[45,60],[60,75],[75,90],[90,200]];
-  for (const [a,b] of bands) if (mph >= a && mph < b) return `${a}-${b}`;
-  return "90+";
+function setSensors(msg) {
+  const el = $("liveSensors");
+  if (el) el.textContent = msg;
 }
 
-function directionBinFromHeading(h) {
-  if (!isFinite(h)) return "UNK";
-  const dirs = ["N","NE","E","SE","S","SW","W","NW"];
-  const idx = Math.round(((h % 360) / 45)) % 8;
-  return dirs[idx];
+function setBadge(state, text) {
+  const b = $("eligBadge");
+  if (!b) return;
+  b.classList.remove("ok","warn","off");
+  b.classList.add(state);
+  b.textContent = text;
 }
 
-function isoZ(d){ return d.toISOString().replace(".000Z","Z"); }
+function clamp01(x){ return Math.max(0, Math.min(1, x)); }
+function nowMs(){ return Date.now(); }
 
-// ---- state ----
-let running = false;
-let motionListener = null;
+log("app.js loaded ✅");
+setSensors("JS running ✅ (tap Start)");
+
+window.running = false;
+
 let geoWatchId = null;
+let tickUI = null;
+let tickSend = null;
+let tickSensors = null;
 
-let lastLat = null, lastLon = null;
-let lastSpeedMps = null, lastHeading = null;
+let lastGPS = null;        // {lat, lon, speedMps, headingDeg, ts}
+let lastMotion = null;     // {g, ts}
+let lastOrient = null;     // {alpha,beta,gamma, ts}
+let motionEvents = 0;
 
-let bucketStart = null;
-let bucketSamples = 0;
+// smoothed stability metrics
+let gEMA = 0;
+let gJitterEMA = 0;
+let lastG = 1.0;
 
-let verticalAccel = [];
-let rotMag = [];
-let gravStability = [];
-let shockCount = 0;
+// sending control
+let lastSendMs = 0;
+let lastNotMovingSendMs = 0;
 
-let uploadQueue = [];
+// notification control
+let lastNotifyMs = 0;
+let lastNotifyKey = "";
 
-async function requestMotionPermissionIfNeeded() {
-  if (typeof DeviceMotionEvent !== "undefined" && typeof DeviceMotionEvent.requestPermission === "function") {
-    const res = await DeviceMotionEvent.requestPermission();
-    if (res !== "granted") throw new Error("Motion permission not granted");
+// wake lock best effort
+let wakeLock = null;
+
+function gridKeyFor(lat, lon) {
+  const gx = Math.floor(lat * 100);
+  const gy = Math.floor(lon * 100);
+  return `g100:x${gx}:y${gy}`;
+}
+
+function speedBand(speedMps) {
+  if (!isFinite(speedMps)) return "unknown";
+  const mph = speedMps * 2.236936;
+  if (mph < 2) return "0-2";
+  if (mph < 10) return "2-10";
+  if (mph < 25) return "10-25";
+  if (mph < 45) return "25-45";
+  if (mph < 70) return "45-70";
+  return "70+";
+}
+
+function postureFromOrientation(beta, gamma) {
+  if (!isFinite(beta) || !isFinite(gamma)) return "unknown";
+  const ab = Math.abs(beta);
+  const ag = Math.abs(gamma);
+  if (ab < 25 && ag < 25) return "flat";
+  if (ab > 55 && ab < 125) return "portrait";
+  if (ag > 45) return "landscape";
+  return "unknown";
+}
+
+function sensorFreshnessScore() {
+  const t = nowMs();
+  const gpsAge = lastGPS ? (t - lastGPS.ts) : 999999;
+  const motAge = lastMotion ? (t - lastMotion.ts) : 999999;
+  const oriAge = lastOrient ? (t - lastOrient.ts) : 999999;
+
+  const gpsS = clamp01(1 - (gpsAge / 8000));
+  const motS = clamp01(1 - (motAge / 1500));
+  const oriS = clamp01(1 - (oriAge / 2500));
+  return 0.45*gpsS + 0.35*motS + 0.20*oriS;
+}
+
+function motionQualityScore(jitter) {
+  return clamp01(1 - (jitter / 0.70));
+}
+
+function mountState(posture, jitter, speedMps) {
+  const moving = (isFinite(speedMps) && speedMps > 1.2);
+
+  if (posture === "flat") {
+    if (!moving && jitter < 0.10) return "desk";
+    return "flat";
+  }
+  if (!moving) return "parked";
+  if (jitter > 0.55) return "hand";
+  if (posture === "portrait" || posture === "landscape") return "mounted";
+  return "unknown";
+}
+
+function computeConfidence(mount, freshness, motionQ) {
+  let mountW = 0.35;
+  if (mount === "mounted") mountW = 1.00;
+  else if (mount === "desk") mountW = 0.95;
+  else if (mount === "flat") mountW = 0.55;
+  else if (mount === "parked") mountW = 0.60;
+  else if (mount === "hand") mountW = 0.15;
+  else mountW = 0.40;
+
+  const c = 0.50*mountW + 0.25*freshness + 0.25*motionQ;
+  return clamp01(c);
+}
+
+function computeAnalyzable(moving, mount, conf) {
+  return (moving && mount === "mounted" && conf >= 0.70) ? 1 : 0;
+}
+
+function computePointsEligible(analyzable, conf) {
+  return (analyzable === 1 && conf >= 0.80) ? 1 : 0;
+}
+
+function qualityNote(moving, mount, conf) {
+  if (!moving) return "not_moving";
+  if (mount === "hand") return "in_hand";
+  if (mount === "flat") return "flat_not_mounted";
+  if (mount !== "mounted") return "not_mounted";
+  if (conf < 0.70) return "low_confidence";
+  return "ok";
+}
+
+async function notifyOnce(key, title, body) {
+  const t = nowMs();
+  if ((t - lastNotifyMs) < 120000 && lastNotifyKey === key) return; // 2 min per same alert
+  lastNotifyMs = t;
+  lastNotifyKey = key;
+
+  try {
+    if (!("Notification" in window)) return;
+    if (Notification.permission === "default") return;
+    if (Notification.permission !== "granted") return;
+    new Notification(title, { body });
+  } catch (_) {}
+}
+
+async function ensureNotifications() {
+  try {
+    if (!("Notification" in window)) return;
+    if (Notification.permission === "default") {
+      const p = await Notification.requestPermission();
+      log("Notifications: " + p);
+    } else {
+      log("Notifications: " + Notification.permission);
+    }
+  } catch (e) {
+    log("Notification permission error: " + String(e));
   }
 }
 
-function resetBucket(now) {
-  bucketStart = new Date(Math.floor(now.getTime() / (BUCKET_SECONDS * 1000)) * BUCKET_SECONDS * 1000);
-  bucketSamples = 0;
-  verticalAccel = [];
-  rotMag = [];
-  gravStability = [];
-  shockCount = 0;
-
-  $("bStart").textContent = isoZ(bucketStart);
-  $("samples").textContent = "0";
-}
-
-function computeConfidence() {
-  const rotStd = std(rotMag);
-  const gravStd = std(gravStability);
-
-  const rotPenalty = clamp(rotStd / 30.0, 0, 1);
-  const gravPenalty = clamp(gravStd / 1.5, 0, 1);
-
-  const conf = 1.0 - (0.65 * rotPenalty + 0.35 * gravPenalty);
-  return clamp(conf, 0, 1);
-}
-
-function computeRoughness() {
-  return rms(verticalAccel);
-}
-
-function maybeFlushBucket(now) {
-  if (!bucketStart) return;
-  const end = bucketStart.getTime() + BUCKET_SECONDS * 1000;
-  if (now.getTime() < end) return;
-
-  const conf = computeConfidence();
-  const rough = computeRoughness();
-  const shocks = shockCount;
-
-  const mph = (lastSpeedMps ?? 0) * 2.236936;
-  const band = speedBandMph(mph);
-  const dir = directionBinFromHeading(lastHeading);
-  const gk = (lastLat != null && lastLon != null) ? gridKeyFromLatLon(lastLat, lastLon, GRID_M) : `g${GRID_M}:x0:y0`;
-
-  const item = {
-    bucket_start: isoZ(bucketStart),
-    bucket_seconds: BUCKET_SECONDS,
-    grid_key: gk,
-    direction: dir,
-    speed_band: band,
-    road_roughness: Number(rough.toFixed(4)),
-    shock_events: shocks,
-    confidence: Number(conf.toFixed(4)),
-    sample_count: bucketSamples
-  };
-
-  uploadQueue.push(item);
-  $("queue").textContent = String(uploadQueue.length);
-  $("btnUpload").disabled = uploadQueue.length === 0;
-
-  resetBucket(now);
-}
-
-async function uploadNow() {
-  if (!uploadQueue.length) return;
-
-  const payload = { node_id: NODE_ID, items: uploadQueue };
-
-  const res = await fetch("/v1/ingest/aggregates", {
-    method: "POST",
-    headers: {
-      "Content-Type": "application/json",
-      ...(API_KEY ? {"X-API-Key": API_KEY} : {})
-    },
-    body: JSON.stringify(payload)
-  });
-
-  const text = await res.text();
-  $("lastUpload").textContent = `HTTP ${res.status}\n` + text;
-
-  if (res.ok) {
-    uploadQueue = [];
-    $("queue").textContent = "0";
-    $("btnUpload").disabled = true;
+async function requestWakeLock() {
+  try {
+    if (!("wakeLock" in navigator)) {
+      log("WakeLock not supported (iOS Safari often).");
+      return;
+    }
+    wakeLock = await navigator.wakeLock.request("screen");
+    log("WakeLock acquired ✅");
+    wakeLock.addEventListener("release", () => log("WakeLock released"));
+  } catch (e) {
+    log("WakeLock error: " + String(e));
   }
 }
 
-function onMotion(e) {
-  if (!running) return;
-  const now = new Date();
-  if (!bucketStart) resetBucket(now);
-
-  const acc = e.acceleration || {};
-  const accG = e.accelerationIncludingGravity || {};
-  const rot = e.rotationRate || {};
-
-  const ra = Number(rot.alpha ?? 0);
-  const rb = Number(rot.beta ?? 0);
-  const rg = Number(rot.gamma ?? 0);
-  const rotM = Math.sqrt(ra*ra + rb*rb + rg*rg);
-  rotMag.push(rotM);
-
-  const magAccG = Math.sqrt((accG.x||0)**2 + (accG.y||0)**2 + (accG.z||0)**2);
-  const magAcc = Math.sqrt((acc.x||0)**2 + (acc.y||0)**2 + (acc.z||0)**2);
-  gravStability.push(Math.abs(magAccG - magAcc));
-
-  let vz = 0;
-  if (e.acceleration && (acc.z !== null && acc.z !== undefined)) {
-    vz = Number(acc.z);
-  } else {
-    vz = Number(accG.z ?? 0) - 9.81;
+document.addEventListener("visibilitychange", () => {
+  if (document.visibilityState === "visible" && window.running) {
+    requestWakeLock();
   }
-  verticalAccel.push(vz);
+});
 
-  if (Math.abs(vz) > 2.2) shockCount += 1;
-
-  bucketSamples += 1;
-
-  const conf = computeConfidence();
-  const rough = computeRoughness();
-
-  $("status").textContent = "Running";
-  $("samples").textContent = String(bucketSamples);
-  $("conf").textContent = conf.toFixed(2);
-  $("rough").textContent = rough.toFixed(2);
-  $("shocks").textContent = String(shockCount);
-
-  maybeFlushBucket(now);
+async function sendAggregate(payload) {
+  try {
+    setText("sendState", "Sending…");
+    const r = await fetch("/v1/ingest/aggregates", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(payload)
+    });
+    if (!r.ok) throw new Error(`HTTP ${r.status}`);
+    setText("sendState", "Sent ✓");
+    setText("lastSent", new Date().toLocaleTimeString());
+    setText("lastErr", "-");
+    lastSendMs = nowMs();
+  } catch (e) {
+    setText("sendState", "Error");
+    setText("lastErr", String(e));
+  }
 }
 
-function startLocation() {
-  geoWatchId = navigator.geolocation.watchPosition(
-    (pos) => {
-      lastLat = pos.coords.latitude;
-      lastLon = pos.coords.longitude;
-      lastHeading = pos.coords.heading;
-      lastSpeedMps = pos.coords.speed;
+function updateUILive() {
+  const t = nowMs();
 
-      const mph = (lastSpeedMps ?? 0) * 2.236936;
-      $("speed").textContent = isFinite(mph) ? `${mph.toFixed(1)} mph` : "—";
-      $("gridKey").textContent = gridKeyFromLatLon(lastLat, lastLon, GRID_M);
-    },
-    (err) => console.warn("geo error", err),
-    { enableHighAccuracy: true, maximumAge: 1000, timeout: 10000 }
+  const lat = lastGPS?.lat;
+  const lon = lastGPS?.lon;
+  const speedMps = lastGPS?.speedMps;
+  const headingDeg = lastGPS?.headingDeg;
+
+  const posture = lastOrient ? postureFromOrientation(lastOrient.beta, lastOrient.gamma) : "unknown";
+  const jitter = clamp01(gJitterEMA);
+  const mount = mountState(posture, jitter, speedMps);
+
+  const moving = (
+    (isFinite(speedMps) && speedMps > 1.2) ||
+    (jitter > 0.18 && lastMotion && (t - lastMotion.ts) < 1500)
+  );
+
+  const fresh = sensorFreshnessScore();
+  const motionQ = motionQualityScore(jitter);
+  const conf = computeConfidence(mount, fresh, motionQ);
+
+  const analyzable = computeAnalyzable(moving, mount, conf);
+  const points = computePointsEligible(analyzable, conf);
+  const note = qualityNote(moving, mount, conf);
+
+  // top live tab updates
+  setText("status", window.running ? (moving ? "Driving" : "Running") : "Ready");
+  setText("speed", isFinite(speedMps) ? (speedMps*2.236936).toFixed(1) + " mph" : "-");
+  setText("gridKey", (isFinite(lat) && isFinite(lon)) ? gridKeyFor(lat, lon) : "-");
+  setText("conf", conf.toFixed(2));
+  setText("shocks", (lastMotion ? (lastMotion.g > 1.75 ? "Shock!" : "0") : "-"));
+  setText("samples", motionEvents);
+
+  // eligibility badge (green/orange)
+  if (!window.running) setBadge("off", "Idle");
+  else if (!moving) setBadge("off", "Not moving");
+  else if (analyzable) setBadge("ok", "Eligible");
+  else setBadge("warn", "Not eligible");
+
+  // keep the existing rough field but make it meaningful
+  setText("rough", analyzable ? "Eligible" : (moving ? "Not eligible" : "Not moving"));
+
+  // notify: moving but not analyzable (mount/hand/flat)
+  if (window.running && moving && analyzable === 0) {
+    notifyOnce(
+      "unanalyzable",
+      "RoadState: data may be unanalyzable",
+      `Mount: ${mount}. Tip: use a firm windshield/dash mount, avoid in-hand.`
+    );
+  }
+
+  return { lat, lon, speedMps, headingDeg, posture, mount, moving, jitter, conf, analyzable, points, note };
+}
+
+function updateSensorsBox(st) {
+  setSensors(
+    `gps: ${isFinite(st.lat)?st.lat.toFixed(5):"-"}, ${isFinite(st.lon)?st.lon.toFixed(5):"-"}\n` +
+    `speed_mps: ${isFinite(st.speedMps)?st.speedMps.toFixed(2):"-"}  heading: ${isFinite(st.headingDeg)?st.headingDeg.toFixed(0):"-"}\n` +
+    `posture: ${st.posture}  mount: ${st.mount}  moving: ${st.moving}\n` +
+    `jitter: ${st.jitter.toFixed(2)}  g_ema: ${gEMA.toFixed(2)}  freshness: ${sensorFreshnessScore().toFixed(2)}\n` +
+    `confidence: ${st.conf.toFixed(2)}  analyzable: ${st.analyzable}  points: ${st.points}\n` +
+    `note: ${st.note}`
   );
 }
 
-function stopLocation() {
-  if (geoWatchId !== null) {
-    navigator.geolocation.clearWatch(geoWatchId);
-    geoWatchId = null;
+function currentBucketStart(seconds=5) {
+  const ms = Date.now();
+  const bucketMs = seconds * 1000;
+  const floored = Math.floor(ms / bucketMs) * bucketMs;
+  const d = new Date(floored);
+  return d.toISOString().replace(".000Z","Z");
+}
+
+async function tickSendLoop() {
+  if (!window.running) return;
+
+  const st = updateUILive();
+
+  // SEND POLICY:
+  // - If moving: send at most every 5s
+  // - If not moving: send only every 30s (heartbeat), to avoid spam
+  const t = nowMs();
+  const minMovingInterval = 5000;
+  const minNotMovingInterval = 30000;
+
+  if (st.moving) {
+    if ((t - lastSendMs) < minMovingInterval) return;
+  } else {
+    if ((t - lastNotMovingSendMs) < minNotMovingInterval) return;
+    lastNotMovingSendMs = t;
   }
+
+  const lat = st.lat, lon = st.lon;
+  const gridKey = (isFinite(lat) && isFinite(lon)) ? gridKeyFor(lat, lon) : "g100:x0:y0";
+
+  const payload = {
+    node_id: "ios_web",
+    items: [{
+      bucket_start: currentBucketStart(5),
+      bucket_seconds: 5,
+      grid_key: gridKey,
+      direction: (isFinite(st.headingDeg) ? String(Math.round(st.headingDeg)) : "unk"),
+      speed_band: speedBand(st.speedMps),
+      road_roughness: null,
+      shock_events: (lastMotion && lastMotion.g > 1.75) ? 1 : 0,
+      confidence: Number(st.conf.toFixed(2)),
+      sample_count: 1,
+
+      lat: isFinite(lat) ? lat : null,
+      lon: isFinite(lon) ? lon : null,
+
+      analyzable: st.analyzable,
+      points_eligible: st.points,
+      quality_note: st.note,
+
+      // extra fields (future-proof; DB can ignore or we can add columns later)
+      mount_state: st.mount,
+      moving: st.moving ? 1 : 0,
+      speed_mps: isFinite(st.speedMps) ? st.speedMps : null,
+      heading_deg: isFinite(st.headingDeg) ? st.headingDeg : null,
+      motion_g: lastMotion ? lastMotion.g : null,
+      motion_rms: Number(st.jitter.toFixed(3)),
+      device_posture: st.posture
+    }]
+  };
+
+  await sendAggregate(payload);
 }
 
 async function startDrive() {
-  await requestMotionPermissionIfNeeded();
-  running = true;
+  if (window.running) return;
+  window.running = true;
+  log("Start ✅");
 
-  $("btnStart").disabled = true;
-  $("btnStop").disabled = false;
-  $("status").textContent = "Starting…";
+  await ensureNotifications();
+  await requestWakeLock();
 
-  bucketStart = null;
+  setText("sendState", "Idle");
+  setText("lastErr", "-");
 
-  motionListener = onMotion;
-  window.addEventListener("devicemotion", motionListener, { passive: true });
+  geoWatchId = navigator.geolocation.watchPosition(
+    (pos) => {
+      lastGPS = {
+        lat: pos.coords.latitude,
+        lon: pos.coords.longitude,
+        speedMps: (pos.coords.speed ?? NaN),
+        headingDeg: (pos.coords.heading ?? NaN),
+        ts: nowMs()
+      };
+    },
+    (err) => log("GPS error: " + err.message),
+    { enableHighAccuracy: true, maximumAge: 0, timeout: 10000 }
+  );
 
-  startLocation();
+  motionEvents = 0;
+  gEMA = 0; gJitterEMA = 0; lastG = 1.0;
+
+  window.addEventListener("devicemotion", (e) => {
+    if (!window.running) return;
+    const a = e.accelerationIncludingGravity;
+    if (!a) return;
+
+    const g = Math.sqrt((a.x||0)**2 + (a.y||0)**2 + (a.z||0)**2) / 9.80665;
+    motionEvents++;
+
+    const alpha = 0.10;
+    gEMA = (1-alpha)*gEMA + alpha*g;
+
+    const dg = Math.abs(g - lastG);
+    lastG = g;
+    gJitterEMA = (1-alpha)*gJitterEMA + alpha*dg;
+
+    lastMotion = { g, ts: nowMs() };
+  }, { passive: true });
+
+  window.addEventListener("deviceorientation", (e) => {
+    if (!window.running) return;
+    lastOrient = { alpha: e.alpha, beta: e.beta, gamma: e.gamma, ts: nowMs() };
+  }, { passive: true });
+
+  // UI: fast tick (snappy)
+  tickUI = setInterval(() => updateUILive(), 250);
+
+  // Debug box: slower
+  tickSensors = setInterval(() => {
+    const st = updateUILive();
+    updateSensorsBox(st);
+  }, 1000);
+
+  // Send loop: checks rules each second, but still max 5s while moving
+  tickSend = setInterval(() => tickSendLoop(), 1000);
+
+  // Buttons
+  if ($("btnStart")) $("btnStart").disabled = true;
+  if ($("btnStop")) $("btnStop").disabled = false;
+  if ($("btnUpload")) { $("btnUpload").disabled = true; $("btnUpload").title = "Auto-sending"; }
+
+  const st0 = updateUILive();
+  updateSensorsBox(st0);
+  setTimeout(() => tickSendLoop(), 1200);
 }
 
 function stopDrive() {
-  running = false;
+  if (!window.running) return;
+  window.running = false;
+  log("Stop ⛔️");
 
-  if (motionListener) {
-    window.removeEventListener("devicemotion", motionListener);
-    motionListener = null;
-  }
-  stopLocation();
+  if (geoWatchId !== null) navigator.geolocation.clearWatch(geoWatchId);
+  geoWatchId = null;
 
-  if (bucketStart && bucketSamples > 5) {
-    const forced = new Date(bucketStart.getTime() + BUCKET_SECONDS * 1000 + 1);
-    maybeFlushBucket(forced);
-  }
+  if (tickUI) clearInterval(tickUI);
+  if (tickSensors) clearInterval(tickSensors);
+  if (tickSend) clearInterval(tickSend);
+  tickUI = null; tickSensors = null; tickSend = null;
 
-  $("status").textContent = "Stopped";
-  $("btnStart").disabled = false;
-  $("btnStop").disabled = true;
+  try { if (wakeLock) wakeLock.release(); } catch(_) {}
+  wakeLock = null;
 
-  $("btnUpload").disabled = uploadQueue.length === 0;
+  if ($("btnStart")) $("btnStart").disabled = false;
+  if ($("btnStop")) $("btnStop").disabled = true;
+  if ($("btnUpload")) $("btnUpload").disabled = true;
+
+  const st = updateUILive();
+  updateSensorsBox(st);
 }
 
-function clearLocal() {
-  uploadQueue = [];
-  $("queue").textContent = "0";
-  $("btnUpload").disabled = true;
-  $("lastUpload").textContent = "Cleared local queue.";
-}
+window.addEventListener("load", () => {
+  if ($("btnStart")) $("btnStart").addEventListener("click", startDrive);
+  if ($("btnStop")) $("btnStop").addEventListener("click", stopDrive);
+  if ($("btnUpload")) { $("btnUpload").disabled = true; $("btnUpload").title = "Auto-sending"; }
 
-$("btnStart").addEventListener("click", () => {
-  startDrive().catch((e) => {
-    $("status").textContent = "Permission denied / error";
-    $("lastUpload").textContent = String(e);
-    $("btnStart").disabled = false;
-    $("btnStop").disabled = true;
-  });
+  const st = updateUILive();
+  updateSensorsBox(st);
 });
-
-$("btnStop").addEventListener("click", () => stopDrive());
-$("btnUpload").addEventListener("click", () => uploadNow().catch(err => $("lastUpload").textContent = String(err)));
-$("btnClear").addEventListener("click", () => clearLocal());

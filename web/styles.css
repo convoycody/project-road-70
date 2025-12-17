@@ -44,3 +44,80 @@ h2 { margin: 0 0 10px 0; font-size: 18px; }
   font-size: 12px;
 }
 code { background: rgba(255,255,255,.08); padding: 2px 6px; border-radius: 8px; }
+
+
+/* ==== RoadState HUD ==== */
+.hud { padding: 14px; }
+.hudTop { display:flex; align-items:flex-start; justify-content:space-between; gap:12px; }
+.hudTitle { font-size: 18px; font-weight: 700; }
+.hudSub { font-size: 12px; opacity: 0.7; margin-top: 2px; }
+.badges { display:flex; flex-wrap:wrap; gap:8px; justify-content:flex-end; }
+.badge { display:inline-block; padding:6px 10px; border-radius:999px; font-size:12px; font-weight:600; border:1px solid rgba(255,255,255,0.18); }
+.badgeSoft { opacity:0.8; font-weight:500; }
+
+.hudGrid {
+  display:grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 10px;
+  margin-top: 12px;
+}
+@media (max-width: 520px) {
+  .hudGrid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+}
+
+.hudItem { padding:10px; border-radius:12px; background: rgba(255,255,255,0.04); border:1px solid rgba(255,255,255,0.08); }
+.hudItem .k { font-size:11px; opacity:0.75; }
+.hudItem .v { font-size:16px; font-weight:700; margin-top:4px; }
+.vRow { display:flex; align-items:center; justify-content:space-between; gap:10px; margin-top:4px; }
+.bar { flex:1; height:10px; border-radius:999px; background: rgba(255,255,255,0.08); overflow:hidden; border:1px solid rgba(255,255,255,0.10); }
+.barFill { height:100%; width:0%; background: rgba(255,255,255,0.65); border-radius:999px; }
+
+
+
+/* ---- RoadState: send status pills ---- */
+.pill {
+  display: inline-block;
+  padding: 6px 10px;
+  border-radius: 999px;
+  font-size: 12px;
+  font-weight: 700;
+  border: 1px solid rgba(255,255,255,.18);
+  background: rgba(255,255,255,.06);
+}
+.pill.idle { opacity: .75; }
+.pill.sending { background: rgba(0,150,255,.18); border-color: rgba(0,150,255,.35); }
+.pill.ok { background: rgba(0,255,160,.14); border-color: rgba(0,255,160,.30); }
+.pill.err { background: rgba(255,60,60,.18); border-color: rgba(255,60,60,.35); }
+
+/* Make manual upload look like a secondary/utility button */
+.btn.utility {
+  background: rgba(255,255,255,.08);
+  border-color: rgba(255,255,255,.18);
+}
+
+
+/* --- Eligibility badge --- */
+.badge{
+  display:inline-flex;
+  align-items:center;
+  gap:8px;
+  padding:6px 10px;
+  border-radius:999px;
+  font-size:12px;
+  line-height:1;
+  border:1px solid rgba(255,255,255,.15);
+  user-select:none;
+}
+.badge::before{
+  content:"";
+  width:10px;
+  height:10px;
+  border-radius:50%;
+  display:inline-block;
+}
+.badge.ok{ background: rgba(0,255,0,.08); }
+.badge.ok::before{ background: #20d05b; }
+.badge.warn{ background: rgba(255,165,0,.10); }
+.badge.warn::before{ background: #ffb020; }
+.badge.off{ background: rgba(255,255,255,.06); }
+.badge.off::before{ background: #9aa3ad; }

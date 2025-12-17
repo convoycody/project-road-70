@@ -1,0 +1,13 @@
+# Python
+.venv/
+__pycache__/
+*.pyc
+
+# Local DB / data
+data.sqlite3
+*.sqlite3
+
+# Backups / temp
+*.bak.*
+*.log
+tmp/
