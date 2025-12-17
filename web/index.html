@@ -1,0 +1,60 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Project Road 70 • v0.1.0</title>
+  <link rel="stylesheet" href="/styles.css" />
+</head>
+<body>
+  <div class="wrap">
+    <header class="card">
+      <h1>Project Road 70</h1>
+      <p class="muted">v0.1.0 • Opt-in road condition sensing • Aggregates only</p>
+      <div class="row">
+        <button id="btnStart" class="btn primary">Start Drive</button>
+        <button id="btnStop" class="btn" disabled>Stop</button>
+      </div>
+      <p class="muted tiny" id="hint">
+        Tip: place your phone <b>flat</b> on a stable surface (center console / charging pad) for best confidence.
+      </p>
+    </header>
+
+    <section class="grid">
+      <div class="card">
+        <h2>Live</h2>
+        <div class="kv"><span>Status</span><span id="status">Idle</span></div>
+        <div class="kv"><span>Speed</span><span id="speed">—</span></div>
+        <div class="kv"><span>Grid</span><span id="gridKey">—</span></div>
+        <div class="kv"><span>Confidence</span><span id="conf">—</span></div>
+        <div class="kv"><span>Roughness</span><span id="rough">—</span></div>
+        <div class="kv"><span>Shocks</span><span id="shocks">—</span></div>
+      </div>
+
+      <div class="card">
+        <h2>Bucket</h2>
+        <div class="kv"><span>Bucket start</span><span id="bStart">—</span></div>
+        <div class="kv"><span>Samples</span><span id="samples">—</span></div>
+        <div class="kv"><span>Upload queue</span><span id="queue">0</span></div>
+        <div class="row">
+          <button id="btnUpload" class="btn" disabled>Upload Now</button>
+          <button id="btnClear" class="btn danger">Clear Local</button>
+        </div>
+        <p class="muted tiny">
+          Uploads are <b>aggregates only</b>. No raw trails.
+        </p>
+      </div>
+    </section>
+
+    <section class="card">
+      <h2>Last Upload</h2>
+      <pre id="lastUpload" class="log">None yet.</pre>
+      <p class="muted tiny">
+        Admin: <code>/admin</code> • Latest JSON: <code>/v1/latest</code>
+      </p>
+    </section>
+  </div>
+
+  <script src="/app.js"></script>
+</body>
+</html>
