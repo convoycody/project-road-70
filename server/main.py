@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import os
 import hashlib
 import secrets
@@ -22,6 +23,7 @@ from server.roadscore import (
     road_detail,
     roads_near,
 )
+from server.analysis import analyze_and_store, ensure_event_tables
 
 ROOT_DIR = Path(__file__).resolve().parent.parent
 WEB_DIR = ROOT_DIR / "web"
@@ -262,7 +264,7 @@ def table_cols(con: sqlite3.Connection, table: str) -> set[str]:
     rows = con.execute(f"PRAGMA table_info({table})").fetchall()
     return {r["name"] for r in rows}
 
-def named_insert_metric(con: sqlite3.Connection, data: Dict[str, Any]) -> int:
+def named_insert_metric(con: sqlite3.Connection, data: Dict[str, Any]) -> tuple[int, Dict[str, Any]]:
     cols = table_cols(con, "metric_aggregates")
     aliases = {
         "heading": "heading_deg",
@@ -325,13 +327,14 @@ def named_insert_metric(con: sqlite3.Connection, data: Dict[str, Any]) -> int:
         raise HTTPException(status_code=400, detail="No writable fields")
     sql = f"INSERT INTO metric_aggregates ({', '.join(keys)}) VALUES ({', '.join('?' for _ in keys)})"
     cur = con.execute(sql, [d[k] for k in keys])
-    return int(cur.lastrowid)
+    return int(cur.lastrowid), d
 
 @app.on_event("startup")
 def _startup() -> None:
     con = db()
     try:
         ensure_tables(con)
+        ensure_event_tables(con)
     finally:
         con.close()
 
@@ -360,13 +363,15 @@ async def ingest_aggregates(request: Request, payload: Dict[str, Any] = Body(...
                     continue
                 row = dict(base)
                 row.update(dict(it))
-                row_id = named_insert_metric(con, row)
+                row_id, stored = named_insert_metric(con, row)
+                analyze_and_store(con, row_id, stored, stored.get("segment_id"))
                 ids.append(row_id)
             con.commit()
             return JSONResponse({"ok": True, "ids": ids, "count": len(ids)})
 
         # Single insert: {...}
-        row_id = named_insert_metric(con, data)
+        row_id, stored = named_insert_metric(con, data)
+        analyze_and_store(con, row_id, stored, stored.get("segment_id"))
         con.commit()
         return JSONResponse({"ok": True, "id": row_id})
     finally:
@@ -383,6 +388,50 @@ async def latest() -> JSONResponse:
           ORDER BY id DESC
           LIMIT 200
         """).fetchall()
+        items = []
+        for r in rows:
+            item = dict(r)
+            payload = item.get("analysis_payload")
+            if isinstance(payload, str) and payload:
+                try:
+                    item["analysis_payload"] = json.loads(payload)
+                except Exception:
+                    pass
+            items.append(item)
+        return JSONResponse({"rows": items})
+    finally:
+        con.close()
+
+@app.get("/v1/events/latest")
+async def latest_events(limit: int = 200, segment_id: str = "") -> JSONResponse:
+    con = db()
+    try:
+        ensure_event_tables(con)
+        limit = max(10, min(1000, int(limit)))
+        segment_id = (segment_id or "").strip()
+        if segment_id:
+            rows = con.execute(
+                """
+                SELECT id, aggregate_id, segment_id, event_type, severity, score, status,
+                       reason, analysis_payload, created_at, updated_at
+                FROM road_events
+                WHERE segment_id = ?
+                ORDER BY created_at DESC
+                LIMIT ?
+                """,
+                (segment_id, limit),
+            ).fetchall()
+        else:
+            rows = con.execute(
+                """
+                SELECT id, aggregate_id, segment_id, event_type, severity, score, status,
+                       reason, analysis_payload, created_at, updated_at
+                FROM road_events
+                ORDER BY created_at DESC
+                LIMIT ?
+                """,
+                (limit,),
+            ).fetchall()
         return JSONResponse({"rows": [dict(r) for r in rows]})
     finally:
         con.close()
@@ -476,7 +525,7 @@ app.mount("/static", StaticFiles(directory=WEB_DIR), name="static")
 def health():
     return {"ok": True}
 
-import json, urllib.parse, urllib.request
+import urllib.parse, urllib.request
 
 def _ensure_geocode_tables(con: sqlite3.Connection) -> None:
     con.execute("""
@@ -637,7 +686,9 @@ async def verify_ingest(request: Request, payload: Dict[str, Any] = Body(...)) -
     con = db()
     try:
         ensure_tables(con)
-        row_id = named_insert_metric(con, dict(payload or {}))
+        data = dict(payload or {})
+        row_id, stored = named_insert_metric(con, data)
+        analyze_and_store(con, row_id, stored, stored.get("segment_id"))
         con.commit()
         return JSONResponse({"ok": True, "id": row_id})
     finally:
@@ -919,5 +970,3 @@ async def map_points(
 
 
 app.mount("/", StaticFiles(directory=WEB_DIR, html=True), name="root")
-
-
