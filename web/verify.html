@@ -1,0 +1,290 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width,initial-scale=1" />
+  <title>RoadState Verify</title>
+  <style>
+    :root{
+      --bg:#0b1220; --panel:#0f1a2e; --text:#e6eefc; --muted:#9fb1d6;
+      --line:#1c2a45; --good:#35d07f; --bad:#ff5f5f; --warn:#ffcc66;
+      --shadow: 0 10px 30px rgba(0,0,0,.35); --radius: 14px;
+      --mono: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace;
+      --sans: ui-sans-serif, system-ui, -apple-system, Segoe UI, Roboto, Helvetica, Arial;
+    }
+    body{ margin:0; background:var(--bg); color:var(--text); font-family:var(--sans); }
+    .wrap{ max-width:900px; margin:0 auto; padding:18px; }
+    .card{ background:var(--panel); border:1px solid var(--line); border-radius:var(--radius); padding:14px; box-shadow:var(--shadow); margin:12px 0; }
+    h1{ margin:8px 0 2px; font-size:20px; }
+    .row{ display:flex; gap:10px; flex-wrap:wrap; }
+    .btn{
+      border:1px solid var(--line); background:#0c1526; color:var(--text);
+      padding:10px 12px; border-radius:12px; cursor:pointer;
+      font-weight:600;
+    }
+    .btn:disabled{ opacity:.45; cursor:not-allowed; }
+    .pill{ display:inline-block; padding:3px 8px; border-radius:999px; font-size:12px; border:1px solid var(--line); color:var(--muted); }
+    .ok{ color:var(--good); }
+    .bad{ color:var(--bad); }
+    .warn{ color:var(--warn); }
+    pre{ background:#0c1526; border:1px solid var(--line); border-radius:12px; padding:10px; overflow:auto; font-family:var(--mono); font-size:12px; }
+    .k{ color:var(--muted); }
+    a{ color:#69a7ff; text-decoration:none; }
+    a:hover{ text-decoration:underline; }
+  </style>
+</head>
+<body>
+  <div class="wrap">
+    <div class="card">
+      <div class="row" style="justify-content:space-between; align-items:center;">
+        <div>
+          <h1>RoadState Verify</h1>
+          <div class="pill">Start/Stop required • iPhone Safari • aggregates only</div>
+        </div>
+        <div class="row">
+          <a class="btn" href="/admin">Admin</a>
+          <a class="btn" href="/">App</a>
+        </div>
+      </div>
+    </div>
+
+    <div class="card">
+      <div class="row">
+        <button id="btnPerms" class="btn">Request Permissions</button>
+        <button id="btnStart" class="btn" disabled>Start</button>
+        <button id="btnStop" class="btn" disabled>Stop</button>
+        <button id="btnUpload" class="btn" disabled>Upload 60s Aggregate</button>
+      </div>
+      <p class="k" style="margin:10px 0 0;">
+        If Motion permissions are blocked on iOS: Settings → Safari → Motion & Orientation Access → Allow.
+      </p>
+    </div>
+
+    <div class="card">
+      <div class="row" style="gap:14px;">
+        <div>
+          <div class="pill">Location</div>
+          <div id="locStatus" class="k">not requested</div>
+        </div>
+        <div>
+          <div class="pill">Motion</div>
+          <div id="motionStatus" class="k">not requested</div>
+        </div>
+        <div>
+          <div class="pill">Session</div>
+          <div id="sessStatus" class="k">idle</div>
+        </div>
+        <div>
+          <div class="pill">Confidence</div>
+          <div id="confStatus" class="k">n/a</div>
+        </div>
+      </div>
+    </div>
+
+    <div class="card">
+      <div class="pill">Live debug</div>
+      <pre id="out">{}</pre>
+    </div>
+  </div>
+
+<script>
+const out = document.getElementById('out');
+const locStatus = document.getElementById('locStatus');
+const motionStatus = document.getElementById('motionStatus');
+const sessStatus = document.getElementById('sessStatus');
+const confStatus = document.getElementById('confStatus');
+
+const btnPerms = document.getElementById('btnPerms');
+const btnStart = document.getElementById('btnStart');
+const btnStop = document.getElementById('btnStop');
+const btnUpload = document.getElementById('btnUpload');
+
+let watchId = null;
+let startedAt = null;
+
+// minimal rolling values (aggregate-only mindset)
+let lastLat = null, lastLon = null;
+let lastSpeedMps = null, lastHeading = null;
+
+let motionSamples = 0;
+let motionEnergy = 0; // crude stability proxy
+let gyroSamples = 0;
+let gyroEnergy = 0;
+
+function log(obj){
+  out.textContent = JSON.stringify(obj, null, 2);
+}
+
+function set(el, txt, cls){
+  el.className = cls || 'k';
+  el.textContent = txt;
+}
+
+async function requestPerms(){
+  // Location permission happens via geolocation call
+  // Motion permission needs explicit request on iOS 13+
+  let motionOk = false;
+  try{
+    if (typeof DeviceMotionEvent !== 'undefined' && typeof DeviceMotionEvent.requestPermission === 'function'){
+      const r = await DeviceMotionEvent.requestPermission();
+      motionOk = (r === 'granted');
+    } else {
+      // non-iOS or older iOS where prompt is not required
+      motionOk = true;
+    }
+  } catch(e){
+    motionOk = false;
+  }
+
+  set(motionStatus, motionOk ? 'granted' : 'blocked', motionOk ? 'ok' : 'bad');
+
+  // Trigger a location prompt
+  await new Promise((resolve)=>{
+    navigator.geolocation.getCurrentPosition(
+      (pos)=>{
+        set(locStatus, 'granted', 'ok');
+        lastLat = pos.coords.latitude;
+        lastLon = pos.coords.longitude;
+        lastSpeedMps = (typeof pos.coords.speed === 'number') ? pos.coords.speed : null;
+        lastHeading = (typeof pos.coords.heading === 'number') ? pos.coords.heading : null;
+        resolve();
+      },
+      (err)=>{
+        set(locStatus, 'blocked: ' + err.code, 'bad');
+        resolve();
+      },
+      { enableHighAccuracy:true, timeout:8000, maximumAge:0 }
+    );
+  });
+
+  btnStart.disabled = !(motionOk && (locStatus.className === 'ok'));
+  log({permissions:{motion:motionOk, location:(locStatus.className==='ok')}});
+}
+
+function onMotion(ev){
+  // We do NOT store raw streams for upload; only compute aggregate signals locally.
+  const a = ev.accelerationIncludingGravity || ev.acceleration || {};
+  const g = ev.rotationRate || {};
+
+  const ax = (a.x || 0), ay = (a.y || 0), az = (a.z || 0);
+  const gx = (g.alpha || 0), gy = (g.beta || 0), gz = (g.gamma || 0);
+
+  // Energy as sum of abs (cheap proxy)
+  motionEnergy += Math.abs(ax) + Math.abs(ay) + Math.abs(az);
+  motionSamples += 1;
+
+  gyroEnergy += Math.abs(gx) + Math.abs(gy) + Math.abs(gz);
+  gyroSamples += 1;
+
+  // confidence: higher when we have samples + location + not obviously nonsense
+  // keep as 0..1
+  const hasLoc = (lastLat !== null && lastLon !== null);
+  const sampleFactor = Math.min(1, motionSamples / 60); // ~60 events to be "good"
+  const base = hasLoc ? 0.5 : 0.1;
+  const conf = Math.max(0, Math.min(1, base + 0.5*sampleFactor));
+  set(confStatus, conf.toFixed(2), conf >= 0.7 ? 'ok' : (conf >= 0.4 ? 'warn' : 'bad'));
+
+  set(motionStatus, 'streaming', 'ok');
+}
+
+function start(){
+  startedAt = Date.now();
+  motionSamples = 0; motionEnergy = 0;
+  gyroSamples = 0; gyroEnergy = 0;
+
+  // start location watch (for speed/heading)
+  watchId = navigator.geolocation.watchPosition(
+    (pos)=>{
+      lastLat = pos.coords.latitude;
+      lastLon = pos.coords.longitude;
+      lastSpeedMps = (typeof pos.coords.speed === 'number') ? pos.coords.speed : null;
+      lastHeading = (typeof pos.coords.heading === 'number') ? pos.coords.heading : null;
+      set(locStatus, 'watching', 'ok');
+    },
+    (err)=>{
+      set(locStatus, 'watch error: ' + err.code, 'bad');
+    },
+    { enableHighAccuracy:true, timeout:8000, maximumAge:0 }
+  );
+
+  window.addEventListener('devicemotion', onMotion, {passive:true});
+
+  set(sessStatus, 'running', 'ok');
+  btnStart.disabled = true;
+  btnStop.disabled = false;
+  btnUpload.disabled = true;
+
+  log({session:'started'});
+}
+
+function stop(){
+  if (watchId !== null){
+    navigator.geolocation.clearWatch(watchId);
+    watchId = null;
+  }
+  window.removeEventListener('devicemotion', onMotion);
+
+  set(sessStatus, 'stopped', 'warn');
+  btnStop.disabled = true;
+  btnUpload.disabled = false;
+
+  const dur = startedAt ? Math.round((Date.now() - startedAt)/1000) : null;
+  log({session:'stopped', duration_seconds:dur, motionSamples, gyroSamples});
+}
+
+async function uploadAggregate(){
+  // enforce 60s bucket rule: require at least 50 seconds in this verification flow
+  const dur = startedAt ? (Date.now() - startedAt)/1000 : 0;
+  if (dur < 50){
+    alert('Run at least ~60s before uploading (privacy-first aggregate rule).');
+    return;
+  }
+
+  const road_roughness = (motionSamples > 0) ? (motionEnergy / motionSamples) : null;
+  const shock_events = 0; // verification only (we're not inventing thresholds here)
+  const confidence = parseFloat(confStatus.textContent) || 0;
+
+  const payload = {
+    received_at: new Date().toISOString().replace('.000','').replace('Z','Z'),
+    node_id: "verify-web",
+    bucket_start: new Date(Date.now() - 60000).toISOString().replace('.000','').replace('Z','Z'),
+    bucket_seconds: 60,
+    grid_key: "seg:verify",
+    direction: "unknown",
+    speed_band: "unknown",
+    road_roughness: road_roughness,
+    shock_events: shock_events,
+    confidence: confidence,
+    sample_count: motionSamples,
+    lat: lastLat,
+    lon: lastLon,
+    speed_mps: lastSpeedMps,
+    heading_deg: lastHeading,
+    quality_note: "verify:client_aggregate_only"
+  };
+
+  const r = await fetch('/v1/verify/ingest', {
+    method:'POST',
+    headers:{'content-type':'application/json'},
+    body: JSON.stringify(payload)
+  });
+
+  const txt = await r.text();
+  if (!r.ok){
+    set(sessStatus, 'upload failed', 'bad');
+    log({upload:'failed', status:r.status, body:txt});
+    return;
+  }
+  set(sessStatus, 'uploaded', 'ok');
+  log({upload:'ok', response:JSON.parse(txt), payload});
+}
+
+btnPerms.addEventListener('click', requestPerms);
+btnStart.addEventListener('click', start);
+btnStop.addEventListener('click', stop);
+btnUpload.addEventListener('click', uploadAggregate);
+
+log({ready:true});
+</script>
+</body>
+</html>

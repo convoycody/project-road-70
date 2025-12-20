@@ -1,316 +1,506 @@
 from __future__ import annotations
 
-
-
-def _sanitize_lat_lon(d: dict) -> None:
-    # Convert and validate lat/lon; if suspicious, null them and note why.
-    def _f(x):
-        if x is None or x == "": return None
-        try: return float(x)
-        except Exception: return None
-
-    lat = _f(d.get("lat"))
-    lon = _f(d.get("lon"))
-
-    bad = []
-    if lat is not None and abs(lat) > 90: bad.append("lat_out_of_range")
-    if lon is not None and abs(lon) > 180: bad.append("lon_out_of_range")
-
-    # patterns we've seen in your DB
-    if lat is not None and lon is not None:
-        if abs(lon) < 1e-6 and 0 < abs(lat) < 2:
-            bad.append("lon_zero_lat_tiny")
-        # lon looks like speed, lat looks like a normalized value
-        if 0 <= abs(lon) <= 80 and 0 < abs(lat) < 2 and d.get("speed_mps") is None:
-            bad.append("lon_looks_like_speed")
-
-    if bad:
-        d["lat"] = None
-        d["lon"] = None
-        q = (d.get("quality_note") or "").strip()
-        tag = "sanity_check:" + ",".join(bad)
-        d["quality_note"] = (q + (" | " if q else "") + tag).strip()
 import os
+import base64
 import sqlite3
 from datetime import datetime, timezone
 from pathlib import Path
+from typing import Any, Dict
 
-from fastapi import FastAPI, HTTPException, Request, Body
-from fastapi.responses import HTMLResponse
+from fastapi import Body, FastAPI, HTTPException, Request
+from fastapi.responses import HTMLResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
-from .ingest_named import insert_metric_aggregate
 
-APP_DIR = Path(__file__).resolve().parent
-ROOT_DIR = APP_DIR.parent
+from server.roadscore import (
+    ensure_schema as rs_ensure_schema,
+    upsert_segment,
+    recompute_scores,
+    top_roads,
+    road_detail,
+    roads_near,
+)
+
+ROOT_DIR = Path(__file__).resolve().parent.parent
 WEB_DIR = ROOT_DIR / "web"
-DB_PATH = ROOT_DIR / "data.sqlite3"
+DB_PATH = Path(os.environ.get("DB_PATH", str(ROOT_DIR / "data.sqlite3")))
+API_KEY = os.environ.get("ROADSTATE_API_KEY", "")
+ADMIN_USER = os.environ.get("ROADSTATE_ADMIN_USER", "")
+ADMIN_PASS = os.environ.get("ROADSTATE_ADMIN_PASS", "")
 
-API_KEY = os.environ.get("API_KEY", "")
+
+app = FastAPI(title="Project Road 70", version="0.1.0")
+
+
+# --- DEBUG: echo endpoint (enabled only when ROADSTATE_DEBUG=1) ---
+if os.environ.get("ROADSTATE_DEBUG", "").strip() == "1":
+    @app.api_route("/v1/debug/echo", methods=["GET","POST","OPTIONS"])
+    async def debug_echo(request: Request):
+        try:
+            body = await request.json()
+        except Exception:
+            body = None
+        return {"ok": True, "method": request.method, "body": body}
+
+
+
 
 def utc_now() -> str:
     return datetime.now(timezone.utc).replace(microsecond=0).isoformat().replace("+00:00", "Z")
 
-def require_key(req: Request) -> None:
-    if not API_KEY:
-        return
-    k = req.headers.get("x-api-key", "")
-    if k != API_KEY:
-        raise HTTPException(status_code=401, detail="Invalid API key")
-
 def db() -> sqlite3.Connection:
     con = sqlite3.connect(DB_PATH)
+    con.row_factory = sqlite3.Row
     con.execute("PRAGMA journal_mode=WAL;")
     con.execute("PRAGMA synchronous=NORMAL;")
     return con
 
-def init_db() -> None:
-    con = db()
-    try:
-        con.execute(
-            """
-            CREATE TABLE IF NOT EXISTS metric_aggregates (
-              id INTEGER PRIMARY KEY AUTOINCREMENT,
-              received_at TEXT NOT NULL,
-              node_id TEXT NOT NULL,
-              bucket_start TEXT NOT NULL,
-              bucket_seconds INTEGER NOT NULL,
-              grid_key TEXT NOT NULL,
-              direction TEXT NOT NULL,
-              speed_band TEXT NOT NULL,
-              road_roughness REAL,
-              shock_events INTEGER,
-              confidence REAL,
-              sample_count INTEGER NOT NULL
-            );
-            """
-        )
-        con.execute("CREATE INDEX IF NOT EXISTS ix_bucket_start ON metric_aggregates(bucket_start);")
-        con.execute("CREATE INDEX IF NOT EXISTS ix_grid_key ON metric_aggregates(grid_key);")
-        con.commit()
-    finally:
-        con.close()
+def require_key(req: Request) -> None:
+    if not API_KEY:
+        return
+    k = (req.headers.get("x-api-key") or "").strip()
+    if k != API_KEY:
+        raise HTTPException(status_code=401, detail="Invalid API key")
 
-app = FastAPI(title="Project Road 70", version="0.1.0")
+def require_admin(req: Request) -> None:
+    # If ADMIN_USER/PASS unset, admin is open (use env to lock it down).
+    if not ADMIN_USER or not ADMIN_PASS:
+        return
+
+    # 1) Accept browser Basic Auth (Authorization: Basic ...)
+    auth = (req.headers.get("authorization") or "").strip()
+    if auth.lower().startswith("basic "):
+        try:
+            raw = base64.b64decode(auth.split(" ", 1)[1]).decode("utf-8", "replace")
+            u, p = raw.split(":", 1)
+        except Exception:
+            u, p = "", ""
+        if (u or "").strip() == ADMIN_USER and (p or "").strip() == ADMIN_PASS:
+            return
+        # if basic provided but wrong, still challenge
+        raise HTTPException(
+            status_code=401,
+            detail="Admin auth required",
+            headers={"WWW-Authenticate": 'Basic realm="RoadState Admin"'},
+        )
+
+    # 2) Accept existing header auth for curl/scripts
+    u = (req.headers.get("x-admin-user") or "").strip()
+    p = (req.headers.get("x-admin-pass") or "").strip()
+    if u == ADMIN_USER and p == ADMIN_PASS:
+        return
+
+    # 3) Otherwise challenge (this makes browsers prompt)
+    raise HTTPException(
+        status_code=401,
+        detail="Admin auth required",
+        headers={"WWW-Authenticate": 'Basic realm="RoadState Admin"'},
+    )
+
+def _f(x):
+    if x is None or x == "":
+        return None
+    try:
+        return float(x)
+    except Exception:
+        return None
+
+def sanitize_lat_lon(d: Dict[str, Any]) -> None:
+    lat = _f(d.get("lat"))
+    lon = _f(d.get("lon"))
+    speed = _f(d.get("speed_mps"))
+    notes = []
+
+    if lat is not None and abs(lat) > 90:
+        notes.append("sanity:lat_out_of_range")
+        lat = None
+    if lon is not None and abs(lon) > 180:
+        notes.append("sanity:lon_out_of_range")
+        lon = None
+
+    # your earlier symptom: lon accidentally became speed-ish
+    if lon is not None and speed is not None and abs(lon) <= 60 and abs(speed) <= 60:
+        notes.append("sanity:lon_looks_like_speed")
+
+    if notes:
+        qn = (d.get("quality_note") or "").strip()
+        d["quality_note"] = (qn + (" | " if qn else "") + " ".join(notes)).strip()
+
+    d["lat"] = lat
+    d["lon"] = lon
+
+def ensure_tables(con: sqlite3.Connection) -> None:
+    con.execute("""
+    CREATE TABLE IF NOT EXISTS metric_aggregates (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      received_at TEXT NOT NULL,
+      node_id TEXT NOT NULL,
+      bucket_start TEXT NOT NULL,
+      bucket_seconds INTEGER NOT NULL,
+      grid_key TEXT NOT NULL,
+      direction TEXT NOT NULL,
+      speed_band TEXT NOT NULL,
+
+      road_roughness REAL,
+      shock_events INTEGER,
+      confidence REAL,
+      sample_count INTEGER,
+
+      lat REAL,
+      lon REAL,
+      speed_mps REAL,
+      heading_deg REAL,
+
+      mount_state TEXT DEFAULT '',
+      device_posture TEXT DEFAULT '',
+      moving INTEGER DEFAULT 0,
+      analyzable INTEGER DEFAULT 1,
+      points_eligible INTEGER DEFAULT 0,
+
+      road_name TEXT DEFAULT '',
+      short_location TEXT DEFAULT '',
+      quality_note TEXT DEFAULT ''
+    );
+    """)
+    con.commit()
+
+def table_cols(con: sqlite3.Connection, table: str) -> set[str]:
+    rows = con.execute(f"PRAGMA table_info({table})").fetchall()
+    return {r["name"] for r in rows}
+
+def named_insert_metric(con: sqlite3.Connection, data: Dict[str, Any]) -> int:
+    cols = table_cols(con, "metric_aggregates")
+    aliases = {
+        "heading": "heading_deg",
+        "speed": "speed_mps",
+        "lat_deg": "lat",
+        "lon_deg": "lon",
+    }
+
+    mapped: Dict[str, Any] = {}
+    for k, v in (data or {}).items():
+        kk = aliases.get(k, k)
+        if kk in cols:
+            mapped[kk] = v
+
+    d = mapped
+    # _ROAD70_DEFAULTS_APPLIED: keep ingest resilient against missing fields
+    if d.get('sample_count') in (None, '', 'null'):
+        d['sample_count'] = 1
+    if d.get('bucket_seconds') in (None, '', 'null'):
+        d['bucket_seconds'] = d.get('window_seconds') or 5
+    if not d.get('node_id'):
+        d['node_id'] = d.get('device_id') or d.get('id') or 'unknown'
+
+    d.setdefault("received_at", utc_now())
+    d.setdefault("node_id", "unknown")
+    d.setdefault("bucket_start", d["received_at"])
+    d.setdefault("bucket_seconds", 5)
+    d.setdefault("grid_key", d.get("grid_key") or "seg:unknown")
+    d.setdefault("direction", d.get("direction") or "unknown")
+    d.setdefault("speed_band", d.get("speed_band") or "unknown")
+    d.setdefault("quality_note", d.get("quality_note") or "")
+
+    sanitize_lat_lon(d)
+
+    keys = [k for k in d.keys() if k in cols]
+    if not keys:
+        raise HTTPException(status_code=400, detail="No writable fields")
+    sql = f"INSERT INTO metric_aggregates ({', '.join(keys)}) VALUES ({', '.join('?' for _ in keys)})"
+    cur = con.execute(sql, [d[k] for k in keys])
+    return int(cur.lastrowid)
 
 @app.on_event("startup")
-def _startup():
-    init_db()
-    if not WEB_DIR.exists():
-        raise RuntimeError(f"Missing web folder at {WEB_DIR}")
-
-# 
-
-@app.get("/admin")
-def admin_page():
-    # Serve dedicated admin HTML (dark themed)
-    return HTMLResponse((WEB_DIR / "admin.html").read_text())
-
-@app.get("/admin/data")
-def admin_data(limit: int = 200):
-    limit = max(10, min(int(limit or 200), 2000))
+def _startup() -> None:
     con = db()
-    con.row_factory = sqlite3.Row
     try:
-        rows = con.execute("""
-          SELECT id, received_at, node_id, lat, lon, speed_mps, heading_deg,
-                 confidence, moving, mount_state, road_name, short_location, quality_note
-          FROM metric_aggregates
-          ORDER BY id DESC
-          LIMIT ?
-        """, (limit,)).fetchall()
-        return {"rows": [dict(r) for r in rows]}
+        ensure_tables(con)
     finally:
         con.close()
 
-app.mount("/", StaticFiles(directory=str(WEB_DIR), html=True), name="web")
-
-@app.get("/admin", response_class=HTMLResponse)
-def admin():
+@app.post("/v1/ingest/aggregates")
+async def ingest_aggregates(request: Request, payload: Dict[str, Any] = Body(...)) -> JSONResponse:
+    require_key(request)
     con = db()
     try:
-        rows = con.execute(
-            "SELECT bucket_start, grid_key, road_roughness, shock_events, confidence, speed_band, sample_count, node_id "
-            "FROM metric_aggregates ORDER BY bucket_start DESC LIMIT 50"
-        ).fetchall()
-    finally:
-        con.close()
-
-    trs = []
-    for r in rows:
-        bucket_start, grid_key, rough, shocks, conf, speed_band, n, node_id = r
-        trs.append(
-            f"<tr><td>{bucket_start}</td><td>{grid_key}</td><td>{rough or ''}</td>"
-            f"<td>{shocks or ''}</td><td>{conf or ''}</td><td>{speed_band}</td><td>{n}</td><td>{node_id}</td></tr>"
-        )
-
-    return HTMLResponse(f"""
-    <html><head><meta charset="utf-8"/><meta name="viewport" content="width=device-width, initial-scale=1"/>
-    <title>Admin</title>
-    <style>
-      body {{ font-family: -apple-system, system-ui, Segoe UI, Roboto, Arial; margin: 24px; }}
-      .card {{ border: 1px solid #ddd; border-radius: 12px; padding: 16px; margin-bottom: 16px; }}
-      table {{ width: 100%; border-collapse: collapse; }}
-      th, td {{ border-bottom: 1px solid #eee; padding: 10px; text-align: left; font-size: 14px; }}
-      th {{ font-size: 12px; opacity: 0.7; text-transform: uppercase; }}
-      code {{ background: #f6f6f6; padding: 2px 6px; border-radius: 6px; }}
-    </style></head><body>
-      <div class="card">
-        <h2 style="margin:0 0 6px 0;">Project Road 70 • v0.1.0</h2>
-        <div>Web app: <a href="/">/</a></div>
-      </div>
-      <div class="card">
-        <h3 style="margin:0 0 12px 0;">Latest aggregates</h3>
-        <table>
-          <thead><tr><th>Bucket</th><th>Grid</th><th>Rough</th><th>Shocks</th><th>Conf</th><th>Speed</th><th>N</th><th>Node</th></tr></thead>
-          <tbody>{''.join(trs) if trs else '<tr><td colspan="8">No data yet.</td></tr>'}</tbody>
-        </table>
-      </div>
-    </body></html>
-    """)
-
-async def ingest_aggregates(payload: dict = Body(...)):
-    con = db()
-    try:
-        rid = insert_metric_aggregate(con, payload)
+        ensure_tables(con)
+        row_id = named_insert_metric(con, dict(payload or {}))
         con.commit()
-        return {"ok": True, "id": rid}
-    except Exception as e:
-        con.rollback()
-        raise HTTPException(status_code=400, detail=str(e))
+        return JSONResponse({"ok": True, "id": row_id})
     finally:
         con.close()
 
 @app.get("/v1/latest")
-def latest(limit: int = 50):
-    limit = max(1, min(200, int(limit)))
+async def latest() -> JSONResponse:
     con = db()
     try:
-        rows = con.execute(
-            "SELECT bucket_start, grid_key, road_roughness, shock_events, confidence, speed_band, sample_count "
-            "FROM metric_aggregates ORDER BY bucket_start DESC LIMIT ?",
-            (limit,)
-        ).fetchall()
+        rows = con.execute("""
+          SELECT id, received_at, node_id, lat, lon, speed_mps, heading_deg, confidence,
+                 road_name, short_location, quality_note
+          FROM metric_aggregates
+          ORDER BY id DESC
+          LIMIT 200
+        """).fetchall()
+        return JSONResponse({"rows": [dict(r) for r in rows]})
     finally:
         con.close()
 
-    return [
-        {
-            "bucket_start": r[0],
-            "grid_key": r[1],
-            "road_roughness": r[2],
-            "shock_events": r[3],
-            "confidence": r[4],
-            "speed_band": r[5],
-            "sample_count": r[6],
-        }
-        for r in rows
-    ]
+@app.get("/admin", response_class=HTMLResponse)
+async def admin_page(request: Request) -> HTMLResponse:
+    f = WEB_DIR / "admin.html"
+    if not f.exists():
+        raise HTTPException(status_code=500, detail="admin.html missing")
+    return HTMLResponse(f.read_text())
 
+@app.get("/admin/api/rows")
+async def admin_rows(request: Request, limit: int = 150, node: str = "") -> JSONResponse:
+    require_admin(request)
+    limit = max(10, min(1000, int(limit)))
+    node = (node or "").strip()
 
-@app.get("/health")
-async def health():
+    con = db()
+    try:
+        ensure_tables(con)
+        if node:
+            rows = con.execute("""
+              SELECT id, received_at, node_id, lat, lon, speed_mps, heading_deg, confidence,
+                     road_name, short_location, quality_note
+              FROM metric_aggregates
+              WHERE node_id = ?
+              ORDER BY id DESC
+              LIMIT ?
+            """, (node, limit)).fetchall()
+        else:
+            rows = con.execute("""
+              SELECT id, received_at, node_id, lat, lon, speed_mps, heading_deg, confidence,
+                     road_name, short_location, quality_note
+              FROM metric_aggregates
+              ORDER BY id DESC
+              LIMIT ?
+            """, (limit,)).fetchall()
+        return JSONResponse({"rows": [dict(r) for r in rows]})
+    finally:
+        con.close()
+
+@app.patch("/admin/api/rows/{row_id}")
+async def admin_patch_row(request: Request, row_id: int, patch: Dict[str, Any] = Body(...)) -> JSONResponse:
+    require_admin(request)
+    con = db()
+    try:
+        ensure_tables(con)
+        cols = table_cols(con, "metric_aggregates")
+        allowed = {"lat","lon","speed_mps","heading_deg","confidence","road_name","short_location","quality_note"}
+        d: Dict[str, Any] = {}
+        for k in allowed:
+            if k in (patch or {}) and k in cols:
+                v = patch.get(k)
+                if k in ("lat","lon","speed_mps","heading_deg","confidence"):
+                    v = _f(v)
+                else:
+                    v = (v or "").strip()
+                d[k] = v
+        if not d:
+            raise HTTPException(status_code=400, detail="No editable fields provided")
+
+        tmp = dict(d)
+        if "lat" in tmp or "lon" in tmp:
+            sanitize_lat_lon(tmp)
+            d["lat"] = tmp.get("lat", d.get("lat"))
+            d["lon"] = tmp.get("lon", d.get("lon"))
+            d["quality_note"] = tmp.get("quality_note", d.get("quality_note",""))
+
+        sets = ", ".join([f"{k} = ?" for k in d.keys()])
+        con.execute(f"UPDATE metric_aggregates SET {sets} WHERE id = ?", [d[k] for k in d.keys()] + [int(row_id)])
+        con.commit()
+        return JSONResponse({"ok": True})
+    finally:
+        con.close()
+
+@app.delete("/admin/api/rows/{row_id}")
+async def admin_delete_row(request: Request, row_id: int) -> JSONResponse:
+    require_admin(request)
+    con = db()
+    try:
+        ensure_tables(con)
+        con.execute("DELETE FROM metric_aggregates WHERE id = ?", (int(row_id),))
+        con.commit()
+        return JSONResponse({"ok": True})
+    finally:
+        con.close()
+
+# IMPORTANT: mount static LAST so it can't swallow /admin or /v1/*
+app.mount("/static", StaticFiles(directory=WEB_DIR), name="static")
+@app.get("/v1/health")
+def health():
     return {"ok": True}
 
+import json, urllib.parse, urllib.request
 
-def _table_cols(con: sqlite3.Connection, table: str) -> set[str]:
-    rows = con.execute(f"PRAGMA table_info({table})").fetchall()
-    return {r[1] for r in rows}
+def _ensure_geocode_tables(con: sqlite3.Connection) -> None:
+    con.execute("""
+      CREATE TABLE IF NOT EXISTS geocode_cache(
+        key TEXT PRIMARY KEY,
+        lat REAL,
+        lon REAL,
+        payload TEXT,
+        road_name TEXT,
+        hwy_ref TEXT,
+        state TEXT,
+        county TEXT,
+        city TEXT,
+        fetched_at INTEGER
+      )
+    """)
+    con.commit()
 
-def _normalize_row(d: dict, cols: set[str]) -> dict:
-    # Accept a few aliases from client
-    aliases = {
-        "speed": "speed_mps",
-        "heading": "heading_deg",
-        "lat_deg": "lat",
-        "lon_deg": "lon",
-    }
-    out = {}
-    for k,v in (d or {}).items():
-        kk = aliases.get(k, k)
-        if kk in cols:
-            out[kk] = v
+def _reverse_geocode_cached(con: sqlite3.Connection, lat: float, lon: float) -> dict:
+    # round to reduce unique lookups (good cache hit rate)
+    key = f"{lat:.5f},{lon:.5f}"
+    _ensure_geocode_tables(con)
 
-    # Light sanity guards (prevents confidence->lat type disasters)
-    try:
-        if "lat" in out and out["lat"] is not None:
-            lat = float(out["lat"])
-            if abs(lat) > 90:
-                out["lat"] = None
-    except Exception:
-        out["lat"] = None
+    row = con.execute("SELECT payload FROM geocode_cache WHERE key=?", (key,)).fetchone()
+    if row and row[0]:
+        try:
+            return json.loads(row[0])
+        except Exception:
+            pass
 
-    try:
-        if "lon" in out and out["lon"] is not None:
-            lon = float(out["lon"])
-            if abs(lon) > 180:
-                out["lon"] = None
-    except Exception:
-        out["lon"] = None
+    # Nominatim (OpenStreetMap) reverse geocode
+    # Keep it gentle: 1 request per new rounded coordinate, 3s timeout.
+    url = "https://nominatim.openstreetmap.org/reverse?" + urllib.parse.urlencode({
+        "format": "jsonv2",
+        "lat": lat,
+        "lon": lon,
+        "zoom": 18,
+        "addressdetails": 1
+    })
+    req = urllib.request.Request(url, headers={"User-Agent": "project-road-70/0.0.2 (admin@local)"})
+    with urllib.request.urlopen(req, timeout=3) as resp:
+        payload = resp.read().decode("utf-8", errors="replace")
+    j = json.loads(payload)
 
-    # If it looks like confidence got shoved into lat/lon, flag it
-    # (lat between 0..1, lon == 0, confidence exists) => likely wrong
-    try:
-        lat = float(out.get("lat")) if out.get("lat") is not None else None
-        lon = float(out.get("lon")) if out.get("lon") is not None else None
-        conf = float(out.get("confidence")) if out.get("confidence") is not None else None
-        if lat is not None and lon is not None and conf is not None:
-            if 0 <= lat <= 1.2 and lon == 0.0 and 0 <= conf <= 1.0:
-                out["analyzable"] = 0
-                q = (out.get("quality_note") or "")
-                out["quality_note"] = (q + " | sanity_check:lat_lon_suspected_from_conf").strip(" |")
-    except Exception:
-        pass
+    addr = (j.get("address") or {})
+    road = addr.get("road") or addr.get("pedestrian") or addr.get("path") or addr.get("footway") or addr.get("cycleway")
+    hwy = addr.get("highway")  # sometimes present
+    # Nominatim sometimes returns "ref" in extra tags; not always present in jsonv2.
+    # We'll attempt a few common keys.
+    ref = addr.get("ref") or addr.get("route") or None
 
-    return out
+    state = addr.get("state")
+    county = addr.get("county")
+    city = addr.get("city") or addr.get("town") or addr.get("village") or addr.get("hamlet")
 
-@app.post("/v1/ingest/aggregates")
-async def ingest_aggregates(payload: dict = Body(...), request: Request = None):
-    require_key(request)  # your existing API key gate (no-op if API_KEY empty)
-    init_db()
+    con.execute("""
+      INSERT INTO geocode_cache(key, lat, lon, payload, road_name, hwy_ref, state, county, city, fetched_at)
+      VALUES(?,?,?,?,?,?,?,?,?,strftime('%s','now'))
+      ON CONFLICT(key) DO UPDATE SET
+        payload=excluded.payload,
+        road_name=excluded.road_name,
+        hwy_ref=excluded.hwy_ref,
+        state=excluded.state,
+        county=excluded.county,
+        city=excluded.city,
+        fetched_at=excluded.fetched_at
+    """, (key, lat, lon, payload, road, (ref or hwy), state, county, city))
+    con.commit()
+    return j
 
-    # Accept either {"rows":[...]} or {"aggregates":[...]} or a single row dict
-    rows = None
-    for key in ("rows","aggregates","data"):
-        if isinstance(payload.get(key), list):
-            rows = payload[key]
-            break
-    if rows is None:
-        rows = [payload]
+def get_db() -> sqlite3.Connection:
+    con = sqlite3.connect("./data.sqlite3", check_same_thread=False)
+    con.row_factory = sqlite3.Row
+    rs_ensure_schema(con)
+    return con
 
+@app.api_route("/admin/api/backfill_geocode", methods=["GET","POST"])
+def admin_backfill_geocode(limit: int = 200):
+    con = get_db()
+    rs_ensure_schema(con)
+
+    # pick rows missing geocode fields but having coords
+    rows = con.execute("""
+      SELECT id, lat, lon FROM metric_aggregates
+      WHERE (road_name IS NULL OR road_name = '')
+        AND lat IS NOT NULL AND lon IS NOT NULL
+      ORDER BY id DESC
+      LIMIT ?
+    """, (int(limit),)).fetchall()
+
+    updated = 0
+    queued = len(rows)
+
+    for r in rows:
+        rid = int(r["id"])
+        lat = float(r["lat"])
+        lon = float(r["lon"])
+
+        try:
+            j = _reverse_geocode_cached(con, lat, lon)
+            addr = (j.get("address") or {})
+            road = addr.get("road") or addr.get("pedestrian") or addr.get("path") or addr.get("footway") or addr.get("cycleway")
+            ref = addr.get("ref") or addr.get("route") or addr.get("highway") or None
+            state = addr.get("state")
+            county = addr.get("county")
+            city = addr.get("city") or addr.get("town") or addr.get("village") or addr.get("hamlet")
+
+            # compute segment_id + upsert segment
+            d = {"lat": lat, "lon": lon, "road_name": road, "hwy_ref": ref, "state": state, "county": county, "city": city}
+            seg = upsert_segment(con, d)
+
+            con.execute("""
+              UPDATE metric_aggregates
+              SET road_name=?, hwy_ref=?, state=?, county=?, city=?,
+                  geocode_src='nominatim', geocoded_at=strftime('%s','now'),
+                  segment_id=?
+              WHERE id=?
+            """, (road, ref, state, county, city, seg, rid))
+            updated += 1
+        except Exception:
+            # keep going; this is a best-effort batch
+            continue
+
+    con.commit()
+    return {"ok": True, "updated": updated, "queued": queued}
+
+@app.api_route("/admin/api/recompute_scores", methods=["GET","POST"])
+def admin_recompute_scores():
+    con = get_db()
+    rs_ensure_schema(con)
+    r = recompute_scores(con, window_days=7)
+    return {"ok": True, **r}
+
+@app.get("/v1/roads/top")
+def v1_roads_top(limit: int = 50, state: str | None = None):
+    con = get_db()
+    items = top_roads(con, limit=int(limit), state=state)
+    return {"items": items}
+
+@app.get("/v1/roads/near")
+def v1_roads_near(lat: float, lon: float, limit: int = 25):
+    con = get_db()
+    items = roads_near(con, float(lat), float(lon), int(limit))
+    return {"items": items}
+
+@app.get("/v1/road/{segment_id}")
+def v1_road(segment_id: str):
+    con = get_db()
+    return road_detail(con, segment_id)
+
+
+# Root static mount MUST be last so API POST routes are not shadowed.
+
+@app.post("/v1/verify/ingest")
+async def verify_ingest(request: Request, payload: Dict[str, Any] = Body(...)) -> JSONResponse:
+    # Verification ingest: accepts ONE aggregate bucket generated client-side.
+    # This must remain aggregate-only.
     con = db()
     try:
-        cols = _table_cols(con, "metric_aggregates")
-        inserted = 0
-        for r in rows:
-            if not isinstance(r, dict):
-                continue
-            d = _normalize_row(r, cols)
-
-            # Required-ish defaults for older clients
-            d.setdefault("received_at", utc_now())
-            d.setdefault("node_id", "unknown")
-            d.setdefault("bucket_start", d["received_at"])
-            d.setdefault("bucket_seconds", 5)
-            d.setdefault("grid_key", "unknown")
-            d.setdefault("direction", "unknown")
-            d.setdefault("speed_band", "unknown")
-            d.setdefault("sample_count", 1)
-
-            # Build INSERT deterministically by column names present
-            keys = [k for k in d.keys() if k in cols]
-            if not keys:
-                continue
-            cols_sql = ", ".join(keys)
-            vals_sql = ", ".join([f":{k}" for k in keys])
-            sql = f"INSERT INTO metric_aggregates ({cols_sql}) VALUES ({vals_sql})"
-            con.execute(sql, d)
-            inserted += 1
-
+        ensure_tables(con)
+        row_id = named_insert_metric(con, dict(payload or {}))
         con.commit()
-        return {"ok": True, "inserted": inserted}
+        return JSONResponse({"ok": True, "id": row_id})
     finally:
         con.close()
 
 
-## MOVED_STATIC_MOUNT (after API routes)
-app.mount("/", StaticFiles(directory=str(WEB_DIR), html=True), name="web")
+app.mount("/", StaticFiles(directory=WEB_DIR, html=True), name="root")
+
+

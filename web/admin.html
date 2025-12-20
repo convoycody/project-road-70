@@ -15,116 +15,266 @@
       --accent:#69a7ff;
       --good:#35d07f;
       --bad:#ff5f5f;
+      --warn:#ffcc66;
+      --shadow: 0 10px 30px rgba(0,0,0,.35);
+      --radius: 14px;
+      --mono: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace;
+      --sans: ui-sans-serif, system-ui, -apple-system, Segoe UI, Roboto, Helvetica, Arial, "Apple Color Emoji","Segoe UI Emoji";
     }
-    html,body{height:100%;margin:0;background:var(--bg);color:var(--text);font-family:ui-sans-serif,system-ui,-apple-system,Segoe UI,Roboto,Helvetica,Arial;}
+    html,body{height:100%;margin:0;background:var(--bg);color:var(--text);font-family:var(--sans);}
     a{color:var(--accent);text-decoration:none}
-    .wrap{max-width:1200px;margin:24px auto;padding:0 16px;}
-    .top{
-      display:flex;gap:12px;align-items:center;justify-content:space-between;
-      background:linear-gradient(180deg,var(--panel),var(--panel2));
-      border:1px solid var(--line); border-radius:16px; padding:14px 16px;
-      box-shadow: 0 10px 30px rgba(0,0,0,.35);
-    }
-    .title{font-size:18px;font-weight:700}
-    .sub{color:var(--muted);font-size:13px;margin-top:4px}
-    .controls{display:flex;gap:10px;align-items:center;flex-wrap:wrap}
-    button{
-      background:rgba(105,167,255,.14);
-      color:var(--text);
-      border:1px solid rgba(105,167,255,.35);
-      padding:9px 12px;border-radius:12px;
-      cursor:pointer;font-weight:600;
-    }
-    button:hover{background:rgba(105,167,255,.22)}
-    input{
-      background:rgba(255,255,255,.04);
-      color:var(--text);
-      border:1px solid var(--line);
-      padding:9px 12px;border-radius:12px;
-      outline:none;
-    }
-    .card{
-      margin-top:14px;
-      background:linear-gradient(180deg,var(--panel),var(--panel2));
-      border:1px solid var(--line); border-radius:16px;
-      overflow:hidden;
-      box-shadow: 0 10px 30px rgba(0,0,0,.35);
-    }
-    table{width:100%;border-collapse:collapse}
-    th,td{padding:10px 12px;border-bottom:1px solid var(--line);font-size:13px;vertical-align:top}
-    th{color:var(--muted);font-weight:700;text-align:left;background:rgba(0,0,0,.18)}
-    tr:hover td{background:rgba(255,255,255,.03)}
-    .pill{display:inline-block;padding:2px 8px;border-radius:999px;border:1px solid var(--line);font-size:12px;color:var(--muted)}
-    .pill.good{color:var(--good);border-color:rgba(53,208,127,.35);background:rgba(53,208,127,.08)}
-    .pill.bad{color:var(--bad);border-color:rgba(255,95,95,.35);background:rgba(255,95,95,.08)}
-    .mono{font-family:ui-monospace,SFMono-Regular,Menlo,Monaco,Consolas,monospace}
+    .wrap{max-width:1200px;margin:0 auto;padding:18px 14px 40px;}
+    .top{display:flex;gap:12px;align-items:center;justify-content:space-between;flex-wrap:wrap}
+    .title{display:flex;gap:10px;align-items:baseline}
+    h1{margin:0;font-size:18px;letter-spacing:.2px}
+    .pill{font-family:var(--mono);font-size:12px;color:var(--muted);border:1px solid var(--line);padding:6px 10px;border-radius:999px;background:rgba(255,255,255,.03)}
+    .grid{display:grid;grid-template-columns: 1.4fr .6fr;gap:12px;margin-top:14px}
+    @media (max-width: 980px){.grid{grid-template-columns:1fr}}
+    .card{background:linear-gradient(180deg,var(--panel),var(--panel2));border:1px solid var(--line);border-radius:var(--radius);box-shadow:var(--shadow);overflow:hidden}
+    .card-h{display:flex;gap:10px;align-items:center;justify-content:space-between;padding:12px 12px;border-bottom:1px solid var(--line)}
+    .card-h .left{display:flex;gap:10px;align-items:center;flex-wrap:wrap}
+    .card-h .right{display:flex;gap:8px;align-items:center;flex-wrap:wrap}
+    .btn{border:1px solid var(--line);background:rgba(255,255,255,.03);color:var(--text);padding:8px 10px;border-radius:10px;font-weight:600;font-size:13px;cursor:pointer}
+    .btn:hover{border-color:#2a3d63}
+    .btn.primary{border-color:rgba(105,167,255,.55);background:rgba(105,167,255,.10)}
+    .btn.good{border-color:rgba(53,208,127,.55);background:rgba(53,208,127,.10)}
+    .btn.warn{border-color:rgba(255,204,102,.55);background:rgba(255,204,102,.10)}
+    .btn.bad{border-color:rgba(255,95,95,.55);background:rgba(255,95,95,.08)}
+    .input{background:rgba(255,255,255,.03);border:1px solid var(--line);color:var(--text);padding:8px 10px;border-radius:10px;font-size:13px;min-width:220px}
+    .small{font-size:12px;color:var(--muted)}
+    .mono{font-family:var(--mono)}
+    .table-wrap{overflow:auto;max-height:72vh}
+    table{border-collapse:separate;border-spacing:0;width:100%;font-size:13px}
+    th,td{padding:10px 10px;border-bottom:1px solid var(--line);vertical-align:top;white-space:nowrap}
+    th{position:sticky;top:0;background:rgba(11,18,32,.92);backdrop-filter: blur(6px);text-align:left;color:#cfe0ff;font-size:12px;letter-spacing:.3px;text-transform:uppercase}
+    td{color:var(--text)}
+    tr:hover td{background:rgba(255,255,255,.02)}
+    .kpi{display:grid;grid-template-columns:1fr 1fr;gap:10px;padding:12px}
+    .k{background:rgba(255,255,255,.03);border:1px solid var(--line);border-radius:12px;padding:10px}
+    .k .n{font-family:var(--mono);font-weight:800;font-size:18px}
+    .k .l{color:var(--muted);font-size:12px;margin-top:4px}
+    .toast{position:fixed;right:14px;bottom:14px;background:rgba(15,26,46,.95);border:1px solid var(--line);padding:10px 12px;border-radius:12px;box-shadow:var(--shadow);display:none;max-width:520px}
+    .toast.show{display:block}
+    details{border:1px solid var(--line);border-radius:12px;background:rgba(255,255,255,.02);padding:10px 10px}
+    summary{cursor:pointer;color:#cfe0ff;font-weight:700}
+    .cols{display:flex;gap:10px;flex-wrap:wrap;margin-top:10px}
+    .chk{display:flex;gap:8px;align-items:center;border:1px solid var(--line);background:rgba(255,255,255,.02);padding:6px 8px;border-radius:10px}
+    .chk input{accent-color:var(--accent)}
   </style>
 </head>
 <body>
-<div class="wrap">
-  <div class="top">
-    <div>
-      <div class="title">Project Road 70 - Admin</div>
-      <div class="sub">Latest aggregates. Includes road_name + short_location when available.</div>
+<div style="margin:10px 0;"><a href="/verify.html" target="_blank" rel="noopener">Open Verify Harness</a></div>
+
+  <div class="wrap">
+    <div class="top">
+      <div class="title">
+        <h1>Admin</h1>
+        <div class="pill">Project Road 70</div>
+        <div class="pill mono" id="envPill">api: /</div>
+      </div>
+      <div class="pill mono" id="statusPill">loading…</div>
     </div>
-    <div class="controls">
-      <input id="limit" type="number" min="10" max="2000" value="200" />
-      <button onclick="loadRows()">Refresh</button>
+
+    <div class="grid">
+      <div class="card">
+        <div class="card-h">
+          <div class="left">
+            <strong>Latest aggregates</strong>
+            <span class="small" id="meta"></span>
+          </div>
+          <div class="right">
+            <input class="input" id="filter" placeholder="filter rows… (node_id, road, state, quality_note…)" />
+            <button class="btn primary" id="refresh">Refresh</button>
+          </div>
+        </div>
+
+        <div class="card-h">
+          <div class="left">
+            <details id="colsBox">
+              <summary>Columns</summary>
+              <div class="cols" id="cols"></div>
+              <div style="margin-top:10px;display:flex;gap:8px;flex-wrap:wrap">
+                <button class="btn" id="colsAll">All</button>
+                <button class="btn" id="colsNone">None</button>
+                <button class="btn" id="colsDefault">Default</button>
+              </div>
+            </details>
+          </div>
+          <div class="right">
+            <button class="btn warn" id="backfill">Backfill road names</button>
+            <button class="btn good" id="score">Recompute scores</button>
+          </div>
+        </div>
+
+        <div class="table-wrap">
+          <table>
+            <thead><tr id="thead"></tr></thead>
+            <tbody id="tbody"></tbody>
+          </table>
+        </div>
+      </div>
+
+      <div class="card">
+        <div class="card-h">
+          <div class="left"><strong>Network KPIs</strong></div>
+          <div class="right"><span class="small">live-ish</span></div>
+        </div>
+        <div class="kpi">
+          <div class="k"><div class="n mono" id="k_rows">—</div><div class="l">rows (metric_aggregates)</div></div>
+          <div class="k"><div class="n mono" id="k_roads">—</div><div class="l">roads scored (7d)</div></div>
+          <div class="k"><div class="n mono" id="k_last">—</div><div class="l">last ingest</div></div>
+          <div class="k"><div class="n mono" id="k_health">—</div><div class="l">health</div></div>
+        </div>
+
+        <div style="padding:12px" class="small">
+          Tip: if columns “disappear” again, it’s usually because the table schema changed.
+          This admin UI renders columns from the data keys, so it adapts automatically.
+        </div>
+      </div>
     </div>
   </div>
 
-  <div class="card">
-    <table>
-      <thead>
-        <tr>
-          <th>ID</th>
-          <th>received_at</th>
-          <th>node</th>
-          <th>lat</th>
-          <th>lon</th>
-          <th>speed_mps</th>
-          <th>heading</th>
-          <th>confidence</th>
-          <th>moving</th>
-          <th>mount_state</th>
-          <th>road_name</th>
-          <th>short_location</th>
-          <th>quality_note</th>
-        </tr>
-      </thead>
-      <tbody id="tbody"></tbody>
-    </table>
-  </div>
-</div>
+  <div class="toast" id="toast"></div>
 
 <script>
-async function loadRows(){
-  const lim = parseInt(document.getElementById('limit').value || '200', 10);
-  const r = await fetch(`/admin/data?limit=${encodeURIComponent(lim)}`);
-  const j = await r.json();
-  const tb = document.getElementById('tbody');
-  tb.innerHTML = '';
-  for (const row of j.rows){
-    const tr = document.createElement('tr');
-    tr.innerHTML = `
-      <td class="mono">${row.id ?? ''}</td>
-      <td class="mono">${row.received_at ?? ''}</td>
-      <td>${row.node_id ?? ''}</td>
-      <td class="mono">${row.lat ?? ''}</td>
-      <td class="mono">${row.lon ?? ''}</td>
-      <td class="mono">${row.speed_mps ?? ''}</td>
-      <td class="mono">${row.heading_deg ?? ''}</td>
-      <td class="mono">${row.confidence ?? ''}</td>
-      <td>${row.moving ? '<span class="pill good">moving</span>' : '<span class="pill">still</span>'}</td>
-      <td>${row.mount_state ?? ''}</td>
-      <td>${row.road_name ?? ''}</td>
-      <td>${row.short_location ?? ''}</td>
-      <td>${row.quality_note ?? ''}</td>
-    `;
-    tb.appendChild(tr);
+const $ = (id)=>document.getElementById(id);
+const toast = (msg)=>{ const t=$("toast"); t.textContent=msg; t.classList.add("show"); setTimeout(()=>t.classList.remove("show"), 2600); };
+
+let rows = [];
+let cols = [];
+let visible = new Set();
+
+const DEFAULT_COLS = [
+  "id","received_at","node_id",
+  "road_name","hwy_ref","state","county","city",
+  "lat","lon","speed_mps","heading_deg",
+  "road_roughness","shock_events","confidence","sample_count",
+  "analyzable","points_eligible","quality_note"
+];
+
+function guessDefaultColumns(keys){
+  const set = new Set(DEFAULT_COLS.filter(k=>keys.includes(k)));
+  // always keep these if present
+  ["id","received_at","node_id"].forEach(k=>{ if(keys.includes(k)) set.add(k); });
+  // if geocode fields not present, show raw coords
+  if(!keys.includes("road_name")){
+    ["lat","lon"].forEach(k=>{ if(keys.includes(k)) set.add(k); });
+  }
+  // keep a couple more common metrics if present
+  ["bucket_start","bucket_seconds","grid_key"].forEach(k=>{ if(keys.includes(k)) set.add(k); });
+  return set;
+}
+
+function buildColsUI(keys){
+  $("cols").innerHTML = "";
+  cols = keys;
+  if (visible.size === 0) visible = guessDefaultColumns(keys);
+
+  keys.forEach(k=>{
+    const wrap = document.createElement("label");
+    wrap.className = "chk";
+    const cb = document.createElement("input");
+    cb.type = "checkbox";
+    cb.checked = visible.has(k);
+    cb.addEventListener("change", ()=>{
+      if(cb.checked) visible.add(k); else visible.delete(k);
+      render();
+    });
+    const span = document.createElement("span");
+    span.textContent = k;
+    span.className = "mono";
+    wrap.appendChild(cb); wrap.appendChild(span);
+    $("cols").appendChild(wrap);
+  });
+
+  $("colsAll").onclick = ()=>{ visible = new Set(keys); render(); buildColsUI(keys); };
+  $("colsNone").onclick = ()=>{ visible = new Set(); render(); buildColsUI(keys); };
+  $("colsDefault").onclick = ()=>{ visible = guessDefaultColumns(keys); render(); buildColsUI(keys); };
+}
+
+function fmt(v){
+  if(v === null || v === undefined) return "";
+  if(typeof v === "number") return Number.isInteger(v) ? String(v) : v.toFixed(4);
+  return String(v);
+}
+
+function render(){
+  const q = $("filter").value.trim().toLowerCase();
+  const shown = rows.filter(r=>{
+    if(!q) return true;
+    return Object.values(r).some(v=>String(v ?? "").toLowerCase().includes(q));
+  });
+
+  const showCols = cols.filter(c=>visible.has(c));
+  $("thead").innerHTML = showCols.map(c=>`<th class="mono">${c}</th>`).join("");
+
+  $("tbody").innerHTML = shown.map(r=>{
+    const tds = showCols.map(c=>`<td class="${c==='quality_note'?'mono':''}">${fmt(r[c])}</td>`).join("");
+    return `<tr>${tds}</tr>`;
+  }).join("");
+
+  $("meta").textContent = `rows: ${shown.length} (of ${rows.length})`;
+}
+
+async function fetchJSON(url, opts){
+  const res = await fetch(url, opts);
+  if(!res.ok){
+    const txt = await res.text();
+    throw new Error(`${res.status} ${res.statusText}: ${txt.slice(0,240)}`);
+  }
+  return await res.json();
+}
+
+async function refresh(){
+  $("statusPill").textContent = "loading…";
+  try{
+    const health = await fetchJSON("/v1/health").catch(()=>({ok:true}));
+    $("k_health").textContent = health.ok ? "OK" : "ERR";
+  }catch(e){
+    $("k_health").textContent = "ERR";
+  }
+
+  try{
+    const data = await fetchJSON("/admin/api/rows?limit=250");
+    rows = data.rows || [];
+    const keys = data.columns || (rows[0] ? Object.keys(rows[0]) : []);
+    buildColsUI(keys);
+    render();
+    $("statusPill").textContent = "ready";
+    $("envPill").textContent = "api: /";
+    $("k_rows").textContent = String(data.total_rows ?? rows.length);
+
+    $("k_last").textContent = rows[0]?.received_at || rows[0]?.bucket_start || "—";
+
+    const scored = await fetchJSON("/v1/roads/top?limit=1").catch(()=>({items:[]}));
+    $("k_roads").textContent = String((scored.items||[]).length ? "≥1" : "0");
+  }catch(e){
+    $("statusPill").textContent = "error";
+    toast(String(e.message || e));
   }
 }
-loadRows();
+
+$("refresh").onclick = refresh;
+$("filter").addEventListener("input", ()=>render());
+
+$("backfill").onclick = async ()=>{
+  toast("Backfill started…");
+  try{
+    const r = await fetchJSON("/admin/api/backfill_geocode?limit=250", {method:"POST"});
+    toast(`Backfill: updated ${r.updated} row(s), queued ${r.queued}`);
+    refresh();
+  }catch(e){ toast("Backfill failed: " + e.message); }
+};
+
+$("score").onclick = async ()=>{
+  toast("Recomputing scores…");
+  try{
+    const r = await fetchJSON("/admin/api/recompute_scores", {method:"POST"});
+    toast(`Scores: roads=${r.roads_scored}, rows_used=${r.rows_used}`);
+  }catch(e){ toast("Score failed: " + e.message); }
+};
+
+refresh();
 </script>
 </body>
 </html>
