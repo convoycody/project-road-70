@@ -1,0 +1,158 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width,initial-scale=1" />
+  <title>About & Transparency - RoadState.club</title>
+  <meta name="description" content="How RoadState.club works, what it collects, what it does not collect, and where the standards live." />
+  <link rel="stylesheet" href="/site.css" />
+
+  <style>
+    body{font-family:system-ui,-apple-system,Segoe UI,Roboto,Ubuntu,Arial;background:#0b1220;color:#eaf0ff;margin:0}
+    .wrap{max-width:980px;margin:0 auto;padding:44px 18px}
+    .big{display:inline-flex;gap:10px;align-items:center;margin:18px 0;padding:16px 18px;border-radius:18px;
+         border:1px solid rgba(255,255,255,.22);text-decoration:none;color:#eaf0ff;font-weight:800}
+    .big:hover{background:rgba(255,255,255,.06)}
+    .muted{opacity:.8}
+  </style>
+
+</head>
+<body>
+<!-- ROADSTATE_MENU_START -->
+<style>
+  .rs-menu-btn{position:fixed;top:14px;left:14px;z-index:9999;width:44px;height:44px;border-radius:12px;
+    background:rgba(15,23,42,.78);border:1px solid rgba(255,255,255,.18);display:flex;align-items:center;justify-content:center;
+    cursor:pointer;backdrop-filter:blur(10px)}
+  .rs-menu-btn:hover{background:rgba(15,23,42,.9)}
+  .rs-burger{width:18px}
+  .rs-burger span{display:block;height:2px;background:#eaf0ff;margin:4px 0;border-radius:2px}
+  .rs-dim{position:fixed;inset:0;background:rgba(0,0,0,.55);z-index:9998;display:none}
+  .rs-drawer{position:fixed;top:0;left:0;height:100vh;width:min(320px,85vw);z-index:9999;transform:translateX(-110%);
+    transition:transform .18s ease; background:#0b1220; border-right:1px solid rgba(255,255,255,.12); padding:18px}
+  .rs-drawer.open{transform:translateX(0)}
+  .rs-dim.open{display:block}
+  .rs-drawer h3{margin:10px 0 14px 0;font:700 18px system-ui,-apple-system,Segoe UI,Roboto,Ubuntu,Arial;color:#eaf0ff}
+  .rs-link{display:block;padding:12px 12px;margin:8px 0;border-radius:12px;text-decoration:none;
+    color:#eaf0ff;background:rgba(255,255,255,.06);border:1px solid rgba(255,255,255,.10);font:600 15px system-ui,-apple-system,Segoe UI,Roboto,Ubuntu,Arial}
+  .rs-link:hover{background:rgba(255,255,255,.09)}
+  .rs-mini{opacity:.75;font:500 12px system-ui,-apple-system,Segoe UI,Roboto,Ubuntu,Arial;margin-top:10px}
+</style>
+
+<div class="rs-menu-btn" id="rsMenuBtn" aria-label="Menu" title="Menu">
+  <div class="rs-burger" aria-hidden="true"><span></span><span></span><span></span></div>
+</div>
+
+<div class="rs-dim" id="rsDim"></div>
+
+<nav class="rs-drawer" id="rsDrawer" aria-label="RoadState menu">
+  <h3>RoadState</h3>
+  <a class="rs-link" href="/">Home</a>
+  <a class="rs-link" href="/about/">About</a>
+  <a class="rs-link" href="https://app.roadstate.club/" rel="noopener">Feed Your Trip</a>
+  <a class="rs-link" href="https://app.roadstate.club/admin" rel="noopener">Admin</a>
+  <div class="rs-mini">Tip: Admin requires login.</div>
+</nav>
+
+<script>
+(function(){
+  const btn = document.getElementById('rsMenuBtn');
+  const dim = document.getElementById('rsDim');
+  const drawer = document.getElementById('rsDrawer');
+  if(!btn || !dim || !drawer) return;
+
+  function openMenu(){ drawer.classList.add('open'); dim.classList.add('open'); }
+  function closeMenu(){ drawer.classList.remove('open'); dim.classList.remove('open'); }
+
+  btn.addEventListener('click', () => drawer.classList.contains('open') ? closeMenu() : openMenu());
+  dim.addEventListener('click', closeMenu);
+  document.addEventListener('keydown', (e)=>{ if(e.key === 'Escape') closeMenu(); });
+})();
+</script>
+<!-- ROADSTATE_MENU_END -->
+
+<div class="wrap">
+<a href="https://app.roadstate.club/" class="big">Feed Your Trip <span>→</span></a>
+</div>
+
+  <div class="wrap">
+    <div class="nav">
+      <div class="brand">
+        <div style="width:10px;height:10px;border-radius:999px;background:var(--accent)"></div>
+        <div>RoadState.club</div>
+        <div class="badge">about & transparency</div>
+      </div>
+      <div class="links">
+        <a class="btn" href="/">Home</a>
+        <a class="btn" href="/map.html">Map</a>
+      </div>
+    </div>
+
+    <div class="hero">
+      <h1 class="h1">About & Transparency</h1>
+  <div style="margin-top:14px">
+    </a>
+  </div>
+  
+      <div class="sub">
+        RoadState exists to measure roads — not people. The network is designed so contributors can help
+        improve road-quality visibility without creating an identity-based tracking system.
+      </div>
+
+      <div class="grid">
+        <div class="card" style="grid-column:span 12">
+          <h3>Mission</h3>
+          <p>
+            Build a nationwide, crowd-powered “road-state” view that helps drivers, fleets, and communities understand
+            which roads are smooth, which roads are rough, and where conditions are changing — using aggregated signals.
+          </p>
+        </div>
+
+        <div class="card">
+          <h3>What we collect</h3>
+          <ul>
+            <li>Short-window aggregates (not raw trails)</li>
+            <li>Quality / analyzable flags (data quality)</li>
+            <li>Approximate location needed to map to road segments</li>
+            <li>Window timestamps (for trends, not personal history)</li>
+          </ul>
+        </div>
+
+        <div class="card">
+          <h3>What we do not collect</h3>
+          <ul>
+            <li>Names, emails, phone numbers (not required)</li>
+            <li>Advertising IDs or cross-app tracking IDs</li>
+            <li>Personal location-history features</li>
+            <li>Contacts, photos, mic recordings</li>
+          </ul>
+        </div>
+
+        <div class="card">
+          <h3>Where the rules live</h3>
+          <p>
+            The standards are published in the repo and meant to be readable by regular humans.
+          </p>
+          <p style="margin-top:10px">
+            <a href="https://github.com/convoycody/project-road-70/blob/main/PROJECT_CHARTER.md" target="_blank" rel="noopener">PROJECT_CHARTER.md</a>
+          </p>
+        </div>
+
+        <div class="card">
+          <h3>Repo</h3>
+          <p>
+            Contribute improvements or raise concerns as issues/PRs:
+          </p>
+          <p style="margin-top:10px">
+            <a href="https://github.com/convoycody/project-road-70" target="_blank" rel="noopener">github.com/convoycody/project-road-70</a>
+          </p>
+        </div>
+      </div>
+
+      <div class="footer">
+        <div><a href="/">← Back to Home</a></div>
+        <div>RoadState.club</div>
+      </div>
+    </div>
+  </div>
+</body>
+</html>

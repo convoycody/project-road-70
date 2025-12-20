@@ -1,6 +1,12 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
+# Usage:
+#   ./release.sh             # bump patch
+#   ./release.sh minor       # bump minor
+#   ./release.sh major       # bump major
+#   ./release.sh 0.1.1       # set explicit version
+
 BUMP="${1:-patch}"
 
 die(){ echo "❌ $*" >&2; exit 1; }
@@ -8,109 +14,50 @@ log(){ echo "== $* =="; }
 
 repo_root="$(git rev-parse --show-toplevel 2>/dev/null)" || die "Not a git repo."
 cd "$repo_root"
-current_branch="$(git rev-parse --abbrev-ref HEAD)"
+branch="$(git rev-parse --abbrev-ref HEAD)"
 
 read_version() {
-  local v=""
-
-  if [[ -f pyproject.toml ]]; then
-    v="$(python3 - <<'PY2'
-import re, pathlib
-p=pathlib.Path("pyproject.toml")
-s=p.read_text()
-m=re.search(r'(?m)^\s*version\s*=\s*"(\d+\.\d+\.\d+)"\s*$', s)
-print(m.group(1) if m else "")
-PY2
-)"
-    [[ -n "$v" ]] && { echo "$v"; return 0; }
-  fi
-
-  if [[ -f package.json ]]; then
-    v="$(python3 - <<'PY2'
-import json, pathlib
-p=pathlib.Path("package.json")
-try:
-  j=json.loads(p.read_text())
-  print(j.get("version",""))
-except Exception:
-  print("")
-PY2
-)"
-    [[ -n "$v" ]] && { echo "$v"; return 0; }
-  fi
-
   if [[ -f VERSION ]]; then
-    v="$(tr -d ' \t\r\n' < VERSION)"
-    [[ "$v" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]] && { echo "$v"; return 0; }
+    tr -d ' \t\r\n' < VERSION
+    return 0
   fi
-
-  echo ""
+  echo "0.0.0"
 }
 
-write_version_everywhere() {
-  local new="$1"
-
-  if [[ -f pyproject.toml ]]; then
-    python3 - <<PY2
-import re, pathlib
-p=pathlib.Path("pyproject.toml")
-s=p.read_text()
-s2=re.sub(r'(?m)^(\s*version\s*=\s*")(\d+\.\d+\.\d+)("\s*)$',
-          r'\g<1>' + "$new" + r'\g<3>', s)
-p.write_text(s2)
-PY2
-  fi
-
-  if [[ -f package.json ]]; then
-    python3 - <<PY2
-import json, pathlib
-p=pathlib.Path("package.json")
-j=json.loads(p.read_text())
-j["version"]="$new"
-p.write_text(json.dumps(j, indent=2) + "\n")
-PY2
-  fi
-
-  echo "$new" > VERSION
+write_version() {
+  local v="$1"
+  echo "$v" > VERSION
 }
 
-bump_semver() {
-  local v="$1" mode="$2"
+bump() {
+  local v="$1"
+  local mode="$2"
   IFS='.' read -r a b c <<<"$v"
+  a="${a:-0}"; b="${b:-0}"; c="${c:-0}"
   case "$mode" in
-    patch) c=$((c+1));;
-    minor) b=$((b+1)); c=0;;
-    major) a=$((a+1)); b=0; c=0;;
-    *) die "Unknown bump mode: $mode";;
+    major) a=$((a+1)); b=0; c=0 ;;
+    minor) b=$((b+1)); c=0 ;;
+    patch) c=$((c+1)) ;;
+    *) die "Unknown bump: $mode" ;;
   esac
   echo "${a}.${b}.${c}"
 }
 
-old="$(read_version)"
-if [[ -z "$old" ]]; then
-  old="0.1.0"
-fi
-
+current="$(read_version)"
 if [[ "$BUMP" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
   new="$BUMP"
 else
-  new="$(bump_semver "$old" "$BUMP")"
+  new="$(bump "$current" "$BUMP")"
 fi
 
-log "Repo: $repo_root"
-log "Branch: $current_branch"
-log "Current version: $old"
-log "Next version: $new"
+log "Version: $current -> $new"
+write_version "$new"
 
-# Make sure you didn't accidentally stage ignored junk
-git add .gitignore >/dev/null 2>&1 || true
-
-write_version_everywhere "$new"
-
+git add VERSION
 git add -A
 
 if git diff --cached --quiet; then
-  die "Nothing to commit after version bump."
+  die "Nothing staged to commit."
 fi
 
 git commit -m "Release v${new}"
@@ -119,10 +66,11 @@ tag="v${new}"
 if git rev-parse -q --verify "refs/tags/${tag}" >/dev/null; then
   die "Tag ${tag} already exists."
 fi
+
 git tag -a "${tag}" -m "Release ${tag}"
 
 log "Pushing branch + tag"
-git push origin "$current_branch"
+git push origin "$branch"
 git push origin "$tag"
 
-log "Done. Released ${tag}"
+log "Done: ${tag}"

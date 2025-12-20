@@ -1,0 +1,70 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width,initial-scale=1" />
+  <title>RoadState - Login</title>
+  <link rel="stylesheet" href="/styles.css" />
+  <style>
+    .wrap{max-width:860px;margin:0 auto;padding:16px}
+    .card{background:rgba(255,255,255,.04);border:1px solid rgba(255,255,255,.08);border-radius:14px;padding:14px;margin:12px 0}
+    .row{display:flex;gap:10px;flex-wrap:wrap}
+    .row > *{flex:1 1 220px}
+    input{width:100%;padding:12px;border-radius:12px;border:1px solid rgba(255,255,255,.12);background:rgba(0,0,0,.2);color:#e6eefc}
+    button{padding:12px 14px;border-radius:12px;border:0;background:#69a7ff;color:#0b1220;font-weight:700;cursor:pointer}
+    .muted{opacity:.75}
+    .mono{font-family:ui-monospace,SFMono-Regular,Menlo,Monaco,Consolas,"Liberation Mono","Courier New",monospace}
+  </style>
+</head>
+<body>
+  <div class="wrap">
+    <div class="card">
+      <h1 style="margin:0 0 6px 0">Login</h1>
+      <div class="muted">Sign in to track your points later (rewards comes next).</div>
+    </div>
+
+    <div class="card">
+      <div class="row">
+        <div>
+          <label>Email</label>
+          <input id="email" type="email" autocomplete="email" placeholder="you@example.com">
+        </div>
+        <div>
+          <label>Password</label>
+          <input id="pass" type="password" autocomplete="current-password" placeholder="••••••••">
+        </div>
+      </div>
+      <div style="margin-top:12px" class="row">
+        <button id="btnLogin">Login</button>
+        <button id="btnGoSignup" style="background:rgba(255,255,255,.12);color:#e6eefc;border:1px solid rgba(255,255,255,.14)">Go to Sign up</button>
+      </div>
+      <div id="out" class="mono" style="margin-top:12px;white-space:pre-wrap"></div>
+    </div>
+  </div>
+
+<script>
+const out = (s)=>document.getElementById("out").textContent = s;
+
+document.getElementById("btnGoSignup").onclick = ()=> location.href="/signup";
+
+document.getElementById("btnLogin").onclick = async ()=>{
+  out("Logging in...");
+  const email = document.getElementById("email").value.trim();
+  const password = document.getElementById("pass").value;
+
+  try{
+    const r = await fetch("/v1/auth/login", {
+      method:"POST",
+      headers:{ "Content-Type":"application/json" },
+      body: JSON.stringify({ email, password })
+    });
+    const j = await r.json().catch(()=>({}));
+    if(!r.ok) throw new Error(j.detail || ("HTTP " + r.status));
+    out("✅ Logged in.\n\nYou can return to the app now.\n(Next: rewards/points after signup+verify flow is solid.)");
+  }catch(e){
+    out("❌ " + String(e));
+  }
+};
+</script>
+</body>
+</html>

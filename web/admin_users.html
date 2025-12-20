@@ -1,0 +1,114 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width,initial-scale=1" />
+  <title>RoadState - Admin Users</title>
+  <link rel="stylesheet" href="/styles.css" />
+  <style>
+    .wrap{max-width:1100px;margin:0 auto;padding:16px}
+    .card{background:rgba(255,255,255,.04);border:1px solid rgba(255,255,255,.08);border-radius:14px;padding:14px;margin:12px 0}
+    .row{display:flex;gap:10px;flex-wrap:wrap}
+    input{padding:10px;border-radius:12px;border:1px solid rgba(255,255,255,.12);background:rgba(0,0,0,.2);color:#e6eefc}
+    button{padding:10px 12px;border-radius:12px;border:0;background:#69a7ff;color:#0b1220;font-weight:700;cursor:pointer}
+    table{width:100%;border-collapse:collapse}
+    th,td{padding:10px;border-bottom:1px solid rgba(255,255,255,.08);text-align:left;vertical-align:top}
+    .muted{opacity:.75}
+    .mono{font-family:ui-monospace,SFMono-Regular,Menlo,Monaco,Consolas,"Liberation Mono","Courier New",monospace}
+    .pill{display:inline-block;padding:4px 8px;border-radius:999px;border:1px solid rgba(255,255,255,.12);margin-right:6px}
+  </style>
+</head>
+<body>
+  <div class="wrap">
+    <div class="card">
+      <div class="row" style="align-items:center;justify-content:space-between">
+        <div>
+          <h1 style="margin:0">User Management</h1>
+          <div class="muted">Admin-only: view users, verify status.</div>
+        </div>
+        <div class="row">
+          <button onclick="location.href='/admin'">← Back to Admin</button>
+        </div>
+      </div>
+    </div>
+
+    <div class="card">
+      <div class="row" style="align-items:flex-end">
+        <div>
+          <label>Admin user</label><br/>
+          <input id="au" placeholder="admin" value="admin">
+        </div>
+        <div>
+          <label>Admin pass</label><br/>
+          <input id="ap" placeholder="(set in systemd env)" type="password">
+        </div>
+        <div>
+          <button id="btnLoad">Load users</button>
+        </div>
+      </div>
+      <div id="out" class="mono" style="margin-top:12px;white-space:pre-wrap"></div>
+    </div>
+
+    <div class="card">
+      <table>
+        <thead>
+          <tr>
+            <th>ID</th>
+            <th>Email</th>
+            <th>Status</th>
+            <th>Created</th>
+            <th>Verified</th>
+          </tr>
+        </thead>
+        <tbody id="tbody">
+          <tr><td colspan="5" class="muted">Load users to view…</td></tr>
+        </tbody>
+      </table>
+    </div>
+  </div>
+
+<script>
+const out = (s)=>document.getElementById("out").textContent = s;
+const tbody = document.getElementById("tbody");
+const hdrs = ()=>({
+  "x-admin-user": document.getElementById("au").value.trim(),
+  "x-admin-pass": document.getElementById("ap").value
+});
+
+function esc(s){return (s??"").toString().replaceAll("&","&amp;").replaceAll("<","&lt;").replaceAll(">","&gt;");}
+
+document.getElementById("btnLoad").onclick = async ()=>{
+  out("Loading…");
+  tbody.innerHTML = `<tr><td colspan="5" class="muted">Loading…</td></tr>`;
+  try{
+    const r = await fetch("/v1/admin/users", { headers: hdrs() });
+    const j = await r.json().catch(()=>({}));
+    if(!r.ok) throw new Error(j.detail || ("HTTP " + r.status));
+
+    const rows = j.users || [];
+    if(!rows.length){
+      tbody.innerHTML = `<tr><td colspan="5" class="muted">No users yet.</td></tr>`;
+    } else {
+      tbody.innerHTML = rows.map(u=>{
+        const st = u.is_active ? "active" : "inactive";
+        const v = u.is_email_verified ? "verified" : "unverified";
+        return `
+          <tr>
+            <td class="mono">${esc(u.id)}</td>
+            <td>${esc(u.email)}</td>
+            <td><span class="pill">${esc(st)}</span><span class="pill">${esc(v)}</span></td>
+            <td class="mono">${esc(u.created_at)}</td>
+            <td class="mono">${esc(u.email_verified_at || "-")}</td>
+          </tr>`;
+      }).join("");
+    }
+
+    out("✅ Loaded " + rows.length + " users.");
+  }catch(e){
+    out("❌ " + String(e));
+    tbody.innerHTML = `<tr><td colspan="5" class="muted">Error loading users.</td></tr>`;
+  }
+};
+</script>
+</body>
+</html>
