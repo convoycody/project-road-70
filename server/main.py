@@ -501,6 +501,15 @@ async def verify_ingest(request: Request, payload: Dict[str, Any] = Body(...)) -
         con.close()
 
 
+
+@app.get("/verify", response_class=HTMLResponse)
+async def verify_page() -> HTMLResponse:
+    f = WEB_DIR / "verify.html"
+    if not f.exists():
+        raise HTTPException(status_code=500, detail="verify.html missing")
+    return HTMLResponse(f.read_text())
+
+
 app.mount("/", StaticFiles(directory=WEB_DIR, html=True), name="root")
 
 
