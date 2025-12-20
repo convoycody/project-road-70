@@ -1,0 +1,36 @@
+{
+	email admin@roadstate.club
+}
+
+# Home/About site
+roadstate.club {
+	encode zstd gzip
+	root * /opt/project-road-70/static
+	file_server
+}
+
+www.roadstate.club {
+	redir https://roadstate.club{uri} permanent
+}
+
+# App/API site
+app.roadstate.club {
+	encode zstd gzip
+
+	# Serve the stable UI assets directly from disk (the ones you liked)
+	handle /styles.css* {
+		root * /opt/project-road-70/web
+		file_server
+	}
+	handle /app.js* {
+		root * /opt/project-road-70/web
+		file_server
+	}
+
+	# Everything else to FastAPI
+	reverse_proxy 127.0.0.1:8787
+}
+
+www.app.roadstate.club {
+	redir https://app.roadstate.club{uri} permanent
+}

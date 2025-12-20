@@ -1,0 +1,25 @@
+# /etc/systemd/system/project-road-70.service
+[Unit]
+Description=Project Road 70 API
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+WorkingDirectory=/opt/project-road-70
+Environment=PYTHONUNBUFFERED=1
+ExecStart=/opt/project-road-70/.venv/bin/python -m uvicorn server.main:app --host 127.0.0.1 --port 8787
+Restart=always
+RestartSec=2
+
+[Install]
+WantedBy=multi-user.target
+
+# /etc/systemd/system/project-road-70.service.d/10-admin-env.conf
+[Service]
+EnvironmentFile=/etc/project-road-70/admin.env
+
+# /etc/systemd/system/project-road-70.service.d/20-admin-auth.conf
+[Service]
+Environment=ROADSTATE_ADMIN_USER=admin
+Environment=ROADSTATE_ADMIN_PASS=<REDACTED>

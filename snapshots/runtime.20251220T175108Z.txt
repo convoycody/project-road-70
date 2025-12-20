@@ -1,0 +1,35 @@
+time_utc=2025-12-20T17:51:08Z
+
+== systemctl is-active ==
+active
+active
+
+== systemctl status project-road-70 ==
+● project-road-70.service - Project Road 70 API
+     Loaded: loaded (/etc/systemd/system/project-road-70.service; enabled; vendor preset: enabled)
+    Drop-In: /etc/systemd/system/project-road-70.service.d
+             └─10-admin-env.conf, 20-admin-auth.conf
+     Active: active (running) since Sat 2025-12-20 17:36:13 UTC; 14min ago
+   Main PID: 85537 (python)
+      Tasks: 1 (limit: 4564)
+     Memory: 27.8M
+        CPU: 1.450s
+     CGroup: /system.slice/project-road-70.service
+             └─85537 /opt/project-road-70/.venv/bin/python -m uvicorn server.main:app --host 127.0.0.1 --port 8787
+
+Dec 20 17:36:13 localhost systemd[1]: Started Project Road 70 API.
+Dec 20 17:36:13 localhost python[85537]: INFO:     Started server process [85537]
+Dec 20 17:36:13 localhost python[85537]: INFO:     Waiting for application startup.
+Dec 20 17:36:13 localhost python[85537]: INFO:     Application startup complete.
+Dec 20 17:36:13 localhost python[85537]: INFO:     Uvicorn running on http://127.0.0.1:8787 (Press CTRL+C to quit)
+Dec 20 17:41:11 localhost python[85537]: INFO:     162.216.18.9:0 - "GET /admin HTTP/1.1" 200 OK
+
+== ss listeners (8787, 80, 443) ==
+LISTEN 0      2048       127.0.0.1:8787       0.0.0.0:*    users:(("python",pid=85537,fd=6))          
+LISTEN 0      4096               *:443              *:*    users:(("caddy",pid=84420,fd=9))           
+LISTEN 0      4096               *:80               *:*    users:(("caddy",pid=84420,fd=12))          
+
+== versions ==
+Python 3.10.12
+fastapi 0.115.5 uvicorn 0.30.6
+v2.10.2 h1:g/gTYjGMD0dec+UgMw8SnfmJ3I9+M2TdvoRL/Ovu6U8=
