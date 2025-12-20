@@ -6,16 +6,20 @@
   <title>RoadState - Admin Users</title>
   <link rel="stylesheet" href="/styles.css" />
   <style>
-    .wrap{max-width:1100px;margin:0 auto;padding:16px}
+    .wrap{max-width:1200px;margin:0 auto;padding:16px}
     .card{background:rgba(255,255,255,.04);border:1px solid rgba(255,255,255,.08);border-radius:14px;padding:14px;margin:12px 0}
     .row{display:flex;gap:10px;flex-wrap:wrap}
     input{padding:10px;border-radius:12px;border:1px solid rgba(255,255,255,.12);background:rgba(0,0,0,.2);color:#e6eefc}
-    button{padding:10px 12px;border-radius:12px;border:0;background:#69a7ff;color:#0b1220;font-weight:700;cursor:pointer}
+    button{padding:10px 12px;border-radius:12px;border:0;background:#69a7ff;color:#0b1220;font-weight:800;cursor:pointer}
+    button.secondary{background:rgba(255,255,255,.10);color:#e6eefc;border:1px solid rgba(255,255,255,.14)}
+    button.danger{background:#ff5f5f;color:#0b1220}
     table{width:100%;border-collapse:collapse}
     th,td{padding:10px;border-bottom:1px solid rgba(255,255,255,.08);text-align:left;vertical-align:top}
     .muted{opacity:.75}
     .mono{font-family:ui-monospace,SFMono-Regular,Menlo,Monaco,Consolas,"Liberation Mono","Courier New",monospace}
     .pill{display:inline-block;padding:4px 8px;border-radius:999px;border:1px solid rgba(255,255,255,.12);margin-right:6px}
+    .actions{display:flex;gap:8px;flex-wrap:wrap}
+    .small{font-size:12px}
   </style>
 </head>
 <body>
@@ -24,10 +28,10 @@
       <div class="row" style="align-items:center;justify-content:space-between">
         <div>
           <h1 style="margin:0">User Management</h1>
-          <div class="muted">Admin-only: view users, verify status.</div>
+          <div class="muted">Admin-only: view users, points, verify, delete.</div>
         </div>
         <div class="row">
-          <button onclick="location.href='/admin'">← Back to Admin</button>
+          <button class="secondary" onclick="location.href='/admin'">← Back to Admin</button>
         </div>
       </div>
     </div>
@@ -56,14 +60,19 @@
             <th>ID</th>
             <th>Email</th>
             <th>Status</th>
+            <th>Points</th>
             <th>Created</th>
             <th>Verified</th>
+            <th>Actions</th>
           </tr>
         </thead>
         <tbody id="tbody">
-          <tr><td colspan="5" class="muted">Load users to view…</td></tr>
+          <tr><td colspan="7" class="muted">Load users to view…</td></tr>
         </tbody>
       </table>
+      <div class="muted small" style="margin-top:10px">
+        Notes: “Verify” sets email_verified=true immediately (manual override). “Delete” revokes sessions, removes user and tokens.
+      </div>
     </div>
   </div>
 
@@ -77,9 +86,20 @@ const hdrs = ()=>({
 
 function esc(s){return (s??"").toString().replaceAll("&","&amp;").replaceAll("<","&lt;").replaceAll(">","&gt;");}
 
-document.getElementById("btnLoad").onclick = async ()=>{
+async function api(path, body){
+  const r = await fetch(path, {
+    method:"POST",
+    headers:{...hdrs(), "Content-Type":"application/json"},
+    body: JSON.stringify(body)
+  });
+  const j = await r.json().catch(()=>({}));
+  if(!r.ok) throw new Error(j.detail || ("HTTP " + r.status));
+  return j;
+}
+
+async function loadUsers(){
   out("Loading…");
-  tbody.innerHTML = `<tr><td colspan="5" class="muted">Loading…</td></tr>`;
+  tbody.innerHTML = `<tr><td colspan="7" class="muted">Loading…</td></tr>`;
   try{
     const r = await fetch("/v1/admin/users", { headers: hdrs() });
     const j = await r.json().catch(()=>({}));
@@ -87,18 +107,28 @@ document.getElementById("btnLoad").onclick = async ()=>{
 
     const rows = j.users || [];
     if(!rows.length){
-      tbody.innerHTML = `<tr><td colspan="5" class="muted">No users yet.</td></tr>`;
+      tbody.innerHTML = `<tr><td colspan="7" class="muted">No users yet.</td></tr>`;
     } else {
       tbody.innerHTML = rows.map(u=>{
         const st = u.is_active ? "active" : "inactive";
         const v = u.is_email_verified ? "verified" : "unverified";
+        const pts = (u.points_balance ?? 0);
+
         return `
           <tr>
             <td class="mono">${esc(u.id)}</td>
             <td>${esc(u.email)}</td>
             <td><span class="pill">${esc(st)}</span><span class="pill">${esc(v)}</span></td>
+            <td class="mono">${esc(pts)}</td>
             <td class="mono">${esc(u.created_at)}</td>
             <td class="mono">${esc(u.email_verified_at || "-")}</td>
+            <td>
+              <div class="actions">
+                <button class="secondary" onclick="doVerify(${u.id})">Verify</button>
+                <button class="secondary" onclick="doSetPoints(${u.id}, ${pts})">Set points</button>
+                <button class="danger" onclick="doDelete(${u.id})">Delete</button>
+              </div>
+            </td>
           </tr>`;
       }).join("");
     }
@@ -106,9 +136,44 @@ document.getElementById("btnLoad").onclick = async ()=>{
     out("✅ Loaded " + rows.length + " users.");
   }catch(e){
     out("❌ " + String(e));
-    tbody.innerHTML = `<tr><td colspan="5" class="muted">Error loading users.</td></tr>`;
+    tbody.innerHTML = `<tr><td colspan="7" class="muted">Error loading users.</td></tr>`;
   }
+}
+
+window.doVerify = async (id)=>{
+  if(!confirm("Manually verify user #" + id + "?")) return;
+  try{
+    out("Verifying user " + id + "…");
+    await api("/v1/admin/users/verify", { user_id:id });
+    out("✅ Verified.");
+    await loadUsers();
+  }catch(e){ out("❌ " + String(e)); }
 };
+
+window.doSetPoints = async (id, cur)=>{
+  const v = prompt("Set points balance for user #" + id, String(cur ?? 0));
+  if(v === null) return;
+  const pts = parseInt(v, 10);
+  if(!Number.isFinite(pts) || pts < 0) { alert("Points must be a non-negative integer."); return; }
+  try{
+    out("Setting points for user " + id + "…");
+    await api("/v1/admin/users/set_points", { user_id:id, points_balance:pts });
+    out("✅ Updated points.");
+    await loadUsers();
+  }catch(e){ out("❌ " + String(e)); }
+};
+
+window.doDelete = async (id)=>{
+  if(!confirm("Delete user #" + id + "?\nThis cannot be undone.")) return;
+  try{
+    out("Deleting user " + id + "…");
+    await api("/v1/admin/users/delete", { user_id:id });
+    out("✅ Deleted.");
+    await loadUsers();
+  }catch(e){ out("❌ " + String(e)); }
+};
+
+document.getElementById("btnLoad").onclick = loadUsers;
 </script>
 </body>
 </html>

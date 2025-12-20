@@ -36,7 +36,7 @@ app = FastAPI(title="Project Road 70", version="0.1.0")
 
 
 ### AUTH SYSTEM (users + email verification + sessions)
-pwd_context = CryptContext(schemes=["bcrypt"], deprecated="auto")
+pwd_context = CryptContext(schemes=["pbkdf2_sha256"], deprecated="auto")
 
 def _now_utc_iso():
     from datetime import datetime, timezone
@@ -71,6 +71,19 @@ def _ensure_user_schema():
       email_verified_at TEXT
     );
     """)
+
+
+def _migrate_users_points_column():
+    # Add points_balance if missing (SQLite-safe)
+    con = sqlite3.connect(DB_PATH)
+    cur = con.cursor()
+    cur.execute("PRAGMA table_info(users)")
+    cols = [r[1] for r in cur.fetchall()]  # name at index 1
+    if "points_balance" not in cols:
+        cur.execute("ALTER TABLE users ADD COLUMN points_balance INTEGER NOT NULL DEFAULT 0")
+        con.commit()
+    con.close()
+
     _db_exec("""
     CREATE TABLE IF NOT EXISTS email_verifications (
       id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -661,6 +674,8 @@ async def auth_signup(payload: Dict[str, Any] = Body(...)) -> JSONResponse:
         raise HTTPException(status_code=400, detail="Valid email required")
     if not password or len(password) < 8:
         raise HTTPException(status_code=400, detail="Password must be at least 8 characters")
+    if len(password) > 256:
+        raise HTTPException(status_code=400, detail="Password must be at most 256 characters")
 
     pass_hash = pwd_context.hash(password)
     created_at = _now_utc_iso()
@@ -755,7 +770,7 @@ async def auth_me(req: Request) -> JSONResponse:
 async def admin_list_users(req: Request) -> JSONResponse:
     _require_admin(req)
     _ensure_user_schema()
-    rows = _db_query("SELECT id,email,is_active,is_email_verified,created_at,email_verified_at FROM users ORDER BY id DESC LIMIT 500")
+    rows = _db_query("SELECT id,email,is_active,is_email_verified,created_at,email_verified_at,points_balance FROM users ORDER BY id DESC LIMIT 500")
     users = []
     for r in rows:
         users.append({
@@ -765,8 +780,52 @@ async def admin_list_users(req: Request) -> JSONResponse:
             "is_email_verified": int(r["is_email_verified"]),
             "created_at": r["created_at"],
             "email_verified_at": r["email_verified_at"],
+            "points_balance": int(r["points_balance"] if r["points_balance"] is not None else 0),
         })
     return JSONResponse({"ok": True, "users": users})
+
+
+
+@app.post("/v1/admin/users/verify")
+async def admin_verify_user(req: Request, payload: Dict[str, Any] = Body(...)) -> JSONResponse:
+    _require_admin(req)
+    _ensure_user_schema()
+    _migrate_users_points_column()
+    user_id = int(payload.get("user_id") or 0)
+    if user_id <= 0:
+        raise HTTPException(status_code=400, detail="user_id required")
+    _db_exec("UPDATE users SET is_email_verified=1, email_verified_at=? WHERE id=?", (_now_utc_iso(), user_id))
+    return JSONResponse({"ok": True})
+
+@app.post("/v1/admin/users/delete")
+async def admin_delete_user(req: Request, payload: Dict[str, Any] = Body(...)) -> JSONResponse:
+    _require_admin(req)
+    _ensure_user_schema()
+    user_id = int(payload.get("user_id") or 0)
+    if user_id <= 0:
+        raise HTTPException(status_code=400, detail="user_id required")
+    # revoke sessions first
+    _db_exec("UPDATE sessions SET revoked_at=? WHERE user_id=? AND revoked_at IS NULL", (_now_utc_iso(), user_id))
+    # delete verification tokens
+    _db_exec("DELETE FROM email_verifications WHERE user_id=?", (user_id,))
+    # delete user
+    _db_exec("DELETE FROM users WHERE id=?", (user_id,))
+    return JSONResponse({"ok": True})
+
+@app.post("/v1/admin/users/set_points")
+async def admin_set_points(req: Request, payload: Dict[str, Any] = Body(...)) -> JSONResponse:
+    _require_admin(req)
+    _ensure_user_schema()
+    _migrate_users_points_column()
+    user_id = int(payload.get("user_id") or 0)
+    points = int(payload.get("points_balance") or 0)
+    if user_id <= 0:
+        raise HTTPException(status_code=400, detail="user_id required")
+    if points < 0:
+        raise HTTPException(status_code=400, detail="points_balance must be >= 0")
+    _db_exec("UPDATE users SET points_balance=? WHERE id=?", (points, user_id))
+    return JSONResponse({"ok": True})
+
 
 app.mount("/", StaticFiles(directory=WEB_DIR, html=True), name="root")
 
