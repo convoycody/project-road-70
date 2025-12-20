@@ -2,85 +2,141 @@
 <html lang="en">
 <head>
   <meta charset="utf-8" />
-  <meta name="viewport" content="width=device-width, initial-scale=1" />
-  <title>Project Road 70 • Map</title>
+  <meta name="viewport" content="width=device-width,initial-scale=1" />
+  <title>RoadState - Live Map</title>
   <link rel="stylesheet" href="/styles.css" />
-  <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
+  <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css"
+    integrity="sha256-p4NxAoJBhIIN+hmNHrzRCf9tD/miZyoHS5obTRR9BMY=" crossorigin=""/>
   <style>
-    #map { height: 70vh; border-radius: 14px; border: 1px solid rgba(255,255,255,.12); overflow:hidden; }
-    .pill { display:inline-block; padding:6px 10px; border-radius:999px; background:rgba(255,255,255,.08); border:1px solid rgba(255,255,255,.12); font-size:12px; }
+    .wrap{max-width:1100px;margin:0 auto;padding:16px}
+    #map{height:70vh;min-height:520px;border-radius:16px;overflow:hidden;border:1px solid rgba(255,255,255,.10)}
+    .row{display:flex;gap:12px;flex-wrap:wrap;align-items:center;justify-content:space-between;margin:12px 0}
+    .pill{padding:8px 10px;border-radius:999px;background:rgba(255,255,255,.06);border:1px solid rgba(255,255,255,.10);font-size:13px}
+    .muted{opacity:.8}
+    .controls{display:flex;gap:10px;flex-wrap:wrap;align-items:center}
+    select,button{background:rgba(255,255,255,.06);border:1px solid rgba(255,255,255,.12);color:#fff;border-radius:10px;padding:8px 10px}
+    button{cursor:pointer}
   </style>
 </head>
 <body>
   <div class="wrap">
-    <header class="card">
-      <h1 style="margin:0 0 6px 0;">Map</h1>
-      <p class="muted">Latest points (aggregates) • colored by roughness • filtered by analyzable</p>
-      <div class="row">
-        <a class="btn" href="/">Home</a>
-        <a class="btn" href="/admin">Admin</a>
-        <span class="pill" id="meta">Loading…</span>
-      </div>
-    </header>
+    <h1 style="margin:6px 0 4px">Live Map</h1>
+    <div class="muted">Generalized cells from uploaded aggregates. Zoom in for finer detail.</div>
 
-    <section class="card">
-      <div id="map"></div>
-      <p class="muted tiny" style="margin-top:10px;">
-        Opt-in contributor aggregates only. No raw trails. No license plate data. No identifying vehicle data.
-      </p>
-    </section>
+    <div class="row">
+      <div class="controls">
+        <span class="pill">Mode:
+          <select id="mode">
+            <option value="quality" selected>Quality (confidence + analyzable)</option>
+            <option value="volume">Volume (count)</option>
+          </select>
+        </span>
+        <span class="pill">Window:
+          <select id="window">
+            <option value="24">Last 24h</option>
+            <option value="6" selected>Last 6h</option>
+            <option value="1">Last 1h</option>
+          </select>
+        </span>
+        <button id="refresh">Refresh</button>
+      </div>
+      <div class="pill">Status: <span id="status">Idle</span></div>
+    </div>
+
+    <div id="map"></div>
+
+    <div class="row">
+      <div class="pill">Legend:
+        <span class="muted">green = better, red = worse, size = more reports</span>
+      </div>
+      <div class="pill">Cells, not breadcrumbs. Privacy win. 🕵️‍♂️🚫</div>
+    </div>
   </div>
 
-  <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+  <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"
+    integrity="sha256-20nQCchB9co0qIjJZRGuk2/Z9VM+kNiyxNV1lvTlZBo=" crossorigin=""></script>
   <script>
-    const map = L.map("map").setView([39.9784, -86.1180], 10);
-    L.tileLayer("https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png", {
+    const statusEl = document.getElementById("status");
+    const modeEl = document.getElementById("mode");
+    const windowEl = document.getElementById("window");
+    const refreshBtn = document.getElementById("refresh");
+
+    const map = L.map('map', { preferCanvas: true }).setView([39.83, -86.15], 10);
+
+    L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
       maxZoom: 19,
-      attribution: "&copy; OpenStreetMap contributors"
+      attribution: '&copy; OpenStreetMap contributors'
     }).addTo(map);
 
-    function colorForRough(rough) {
-      if (rough == null) return "#9aa4b2";
-      const r = Math.max(0, Math.min(4, rough));
-      const t = r / 4.0;
-      const R = Math.round(40 + 200*t);
-      const G = Math.round(220 - 160*t);
-      const B = Math.round(80 - 50*t);
-      return `rgb(${R},${G},${B})`;
+    const layer = L.layerGroup().addTo(map);
+
+    function clamp(v, a, b){ return Math.max(a, Math.min(b, v)); }
+    function colorForQuality(q){
+      const r = Math.round(255 * (1 - q));
+      const g = Math.round(255 * q);
+      const b = 80;
+      return `rgb(${r},${g},${b})`;
+    }
+    function colorForVolume(n){
+      const x = clamp(Math.log10(1 + n) / 2.0, 0, 1);
+      return colorForQuality(x);
     }
 
-    async function load() {
-      const res = await fetch("/v1/map/latest?limit=2000");
-      const pts = await res.json();
+    async function loadPoints(){
+      statusEl.textContent = "Loading…";
+      layer.clearLayers();
 
-      let count = 0;
-      const bounds = [];
-      for (const p of pts) {
-        if (!p.analyzable) continue;
-        if (typeof p.lat !== "number" || typeof p.lon !== "number") continue;
+      const b = map.getBounds();
+      const z = map.getZoom();
+      const hrs = windowEl.value;
+      const mode = modeEl.value;
 
-        const c = colorForRough(p.rough);
-        const marker = L.circleMarker([p.lat, p.lon], {
-          radius: 6, color: c, fillColor: c, fillOpacity: 0.75, weight: 1
-        }).addTo(map);
+      const url = `/v1/map/points?z=${encodeURIComponent(z)}&hours=${encodeURIComponent(hrs)}`
+        + `&min_lat=${b.getSouth()}&min_lon=${b.getWest()}&max_lat=${b.getNorth()}&max_lon=${b.getEast()}`;
+
+      const res = await fetch(url);
+      if (!res.ok) { statusEl.textContent = `Error (HTTP ${res.status})`; return; }
+
+      const data = await res.json();
+      const features = data.features || [];
+
+      for (const f of features){
+        const [lon, lat] = f.geometry.coordinates;
+        const p = f.properties;
+
+        const count = p.count || 1;
+        const q = (p.quality_score ?? 0.5);
+        const analyzableRate = (p.analyzable_rate ?? 0);
+
+        const col = (mode === "volume") ? colorForVolume(count) : colorForQuality(q);
+        const radius = clamp(4 + Math.log10(1 + count) * 10, 4, 22);
+
+        const marker = L.circleMarker([lat, lon], {
+          radius, weight: 1, opacity: 0.9, fillOpacity: 0.45,
+          color: col, fillColor: col
+        });
 
         marker.bindPopup(
-          `<b>${p.grid_key}</b><br>` +
-          `rough: ${p.rough ?? ""}<br>` +
-          `shocks: ${p.shocks ?? ""}<br>` +
-          `conf: ${p.conf ?? ""}<br>` +
-          `t: ${p.bucket_start}`
+          `<b>Cell</b><br/>` +
+          `count: ${count}<br/>` +
+          `avg_conf: ${(p.avg_confidence ?? 0).toFixed(2)}<br/>` +
+          `analyzable_rate: ${(analyzableRate*100).toFixed(0)}%<br/>` +
+          `quality_score: ${(q*100).toFixed(0)}%<br/>` +
+          `<span style="opacity:.8">rounded @ zoom ${z}</span>`
         );
 
-        bounds.push([p.lat, p.lon]);
-        count++;
+        marker.addTo(layer);
       }
 
-      document.getElementById("meta").textContent = `${count} analyzable points`;
-      if (bounds.length) map.fitBounds(bounds, { padding: [20, 20] });
+      statusEl.textContent = `OK (${features.length} cells)`;
     }
 
-    load().catch(err => document.getElementById("meta").textContent = String(err));
+    refreshBtn.addEventListener("click", loadPoints);
+    map.on("moveend", loadPoints);
+    modeEl.addEventListener("change", loadPoints);
+    windowEl.addEventListener("change", loadPoints);
+
+    loadPoints();
   </script>
 </body>
 </html>

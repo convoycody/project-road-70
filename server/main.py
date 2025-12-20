@@ -827,6 +827,97 @@ async def admin_set_points(req: Request, payload: Dict[str, Any] = Body(...)) ->
     return JSONResponse({"ok": True})
 
 
+
+def _cell_rounding_for_zoom(z: int) -> float:
+    # Degree rounding step by zoom (privacy + performance)
+    if z <= 8: return 0.05
+    if z <= 10: return 0.02
+    if z <= 12: return 0.01
+    if z <= 14: return 0.005
+    return 0.002
+
+def _round_to_step(x: float, step: float) -> float:
+    return round(x / step) * step
+
+
+
+@app.get("/map")
+async def map_page() -> Response:
+    return FileResponse(str(WEB_DIR / "map.html"), media_type="text/html")
+
+
+
+@app.get("/v1/map/points")
+async def map_points(
+    z: int = 12,
+    hours: int = 6,
+    min_lat: float = -90.0,
+    min_lon: float = -180.0,
+    max_lat: float = 90.0,
+    max_lon: float = 180.0
+) -> JSONResponse:
+    """Generalized cells grouped by rounded lat/lon based on zoom (GeoJSON)."""
+    step = _cell_rounding_for_zoom(int(z))
+    hrs = max(1, min(int(hours), 168))  # 1h..7d
+    min_lat2, max_lat2 = sorted([float(min_lat), float(max_lat)])
+    min_lon2, max_lon2 = sorted([float(min_lon), float(max_lon)])
+
+    con = db_connect()
+    con.row_factory = sqlite3.Row
+    cur = con.cursor()
+
+    cur.execute(
+        """
+        SELECT
+          lat, lon,
+          COALESCE(confidence, 0.0) as confidence,
+          COALESCE(analyzable, 0) as analyzable
+        FROM metric_aggregates
+        WHERE lat IS NOT NULL AND lon IS NOT NULL
+          AND lat BETWEEN ? AND ?
+          AND lon BETWEEN ? AND ?
+          AND received_at >= datetime('now', ?)
+        """,
+        (min_lat2, max_lat2, min_lon2, max_lon2, f'-{hrs} hours')
+    )
+
+    buckets = {}
+    for r in cur.fetchall():
+        lat = float(r["lat"]); lon = float(r["lon"])
+        clat = _round_to_step(lat, step)
+        clon = _round_to_step(lon, step)
+        key = (clat, clon)
+        b = buckets.get(key)
+        if not b:
+            b = buckets[key] = {"count": 0, "conf_sum": 0.0, "an_sum": 0}
+        b["count"] += 1
+        b["conf_sum"] += float(r["confidence"] or 0.0)
+        b["an_sum"] += int(r["analyzable"] or 0)
+
+    con.close()
+
+    features = []
+    for (clat, clon), b in buckets.items():
+        count = b["count"]
+        avg_conf = (b["conf_sum"] / count) if count else 0.0
+        analyzable_rate = (b["an_sum"] / count) if count else 0.0
+        quality = max(0.0, min(1.0, 0.70*avg_conf + 0.30*analyzable_rate))
+
+        features.append({
+            "type": "Feature",
+            "geometry": {"type": "Point", "coordinates": [clon, clat]},
+            "properties": {
+                "count": count,
+                "avg_confidence": avg_conf,
+                "analyzable_rate": analyzable_rate,
+                "quality_score": quality,
+                "step_deg": step
+            }
+        })
+
+    return JSONResponse({"type": "FeatureCollection", "features": features})
+
+
 app.mount("/", StaticFiles(directory=WEB_DIR, html=True), name="root")
 
 
