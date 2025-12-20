@@ -11,7 +11,7 @@ from typing import Any, Dict
 
 from fastapi import Body, FastAPI, HTTPException, Request
 from passlib.context import CryptContext
-from fastapi.responses import HTMLResponse, JSONResponse
+from fastapi.responses import HTMLResponse, JSONResponse, Response, FileResponse
 from fastapi.staticfiles import StaticFiles
 
 from server.roadscore import (
@@ -862,7 +862,7 @@ async def map_points(
     min_lat2, max_lat2 = sorted([float(min_lat), float(max_lat)])
     min_lon2, max_lon2 = sorted([float(min_lon), float(max_lon)])
 
-    con = db_connect()
+    con = db()
     con.row_factory = sqlite3.Row
     cur = con.cursor()
 
@@ -919,5 +919,4 @@ async def map_points(
 
 
 app.mount("/", StaticFiles(directory=WEB_DIR, html=True), name="root")
-
 
