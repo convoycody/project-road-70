@@ -82,6 +82,29 @@ def init_db() -> None:
           updated_at TEXT NOT NULL
         );
         """)
+        con.execute("""
+        CREATE TABLE IF NOT EXISTS road_events (
+          id INTEGER PRIMARY KEY AUTOINCREMENT,
+          aggregate_id INTEGER,
+          segment_id TEXT,
+          event_type TEXT NOT NULL,
+          severity TEXT NOT NULL,
+          score REAL,
+          status TEXT NOT NULL DEFAULT 'open',
+          reason TEXT NOT NULL,
+          analysis_payload TEXT,
+          created_at INTEGER NOT NULL,
+          updated_at INTEGER NOT NULL
+        );
+        """)
+        con.execute("""
+        CREATE INDEX IF NOT EXISTS idx_road_events_segment
+        ON road_events(segment_id, created_at);
+        """)
+        con.execute("""
+        CREATE INDEX IF NOT EXISTS idx_road_events_aggregate
+        ON road_events(aggregate_id);
+        """)
         con.commit()
     finally:
         con.close()

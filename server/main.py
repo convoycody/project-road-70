@@ -1,10 +1,13 @@
 from __future__ import annotations
 
+import hmac
+import json
 import os
 import hashlib
 import secrets
 import base64
 import sqlite3
+import subprocess
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Dict
@@ -22,6 +25,7 @@ from server.roadscore import (
     road_detail,
     roads_near,
 )
+from server.analysis import analyze_and_store, ensure_event_tables
 
 ROOT_DIR = Path(__file__).resolve().parent.parent
 WEB_DIR = ROOT_DIR / "web"
@@ -29,6 +33,9 @@ DB_PATH = Path(os.environ.get("DB_PATH", str(ROOT_DIR / "data.sqlite3")))
 API_KEY = os.environ.get("ROADSTATE_API_KEY", "")
 ADMIN_USER = os.environ.get("ROADSTATE_ADMIN_USER", "")
 ADMIN_PASS = os.environ.get("ROADSTATE_ADMIN_PASS", "")
+GITHUB_WEBHOOK_SECRET = os.environ.get("GITHUB_WEBHOOK_SECRET", "")
+GITHUB_WEBHOOK_BRANCH = os.environ.get("GITHUB_WEBHOOK_BRANCH", "refs/heads/main")
+DEPLOY_SCRIPT = os.environ.get("ROADSTATE_DEPLOY_SCRIPT", "")
 
 
 app = FastAPI(title="Project Road 70", version="0.1.0")
@@ -120,6 +127,14 @@ def _session_user(req: Request):
       return None
     rows = _db_query("SELECT u.* FROM sessions s JOIN users u ON u.id=s.user_id WHERE s.token=? AND s.revoked_at IS NULL", (tok,))
     return dict(rows[0]) if rows else None
+
+def _verify_github_signature(secret: str, body: bytes, signature: str) -> bool:
+    if not secret:
+        return False
+    if not signature or not signature.startswith("sha256="):
+        return False
+    expected = hmac.new(secret.encode("utf-8"), body, hashlib.sha256).hexdigest()
+    return hmac.compare_digest(signature, f"sha256={expected}")
 
 @app.on_event("startup")
 async def _startup_users_schema():
@@ -262,7 +277,7 @@ def table_cols(con: sqlite3.Connection, table: str) -> set[str]:
     rows = con.execute(f"PRAGMA table_info({table})").fetchall()
     return {r["name"] for r in rows}
 
-def named_insert_metric(con: sqlite3.Connection, data: Dict[str, Any]) -> int:
+def named_insert_metric(con: sqlite3.Connection, data: Dict[str, Any]) -> tuple[int, Dict[str, Any]]:
     cols = table_cols(con, "metric_aggregates")
     aliases = {
         "heading": "heading_deg",
@@ -325,13 +340,14 @@ def named_insert_metric(con: sqlite3.Connection, data: Dict[str, Any]) -> int:
         raise HTTPException(status_code=400, detail="No writable fields")
     sql = f"INSERT INTO metric_aggregates ({', '.join(keys)}) VALUES ({', '.join('?' for _ in keys)})"
     cur = con.execute(sql, [d[k] for k in keys])
-    return int(cur.lastrowid)
+    return int(cur.lastrowid), d
 
 @app.on_event("startup")
 def _startup() -> None:
     con = db()
     try:
         ensure_tables(con)
+        ensure_event_tables(con)
     finally:
         con.close()
 
@@ -360,13 +376,15 @@ async def ingest_aggregates(request: Request, payload: Dict[str, Any] = Body(...
                     continue
                 row = dict(base)
                 row.update(dict(it))
-                row_id = named_insert_metric(con, row)
+                row_id, stored = named_insert_metric(con, row)
+                analyze_and_store(con, row_id, stored, stored.get("segment_id"))
                 ids.append(row_id)
             con.commit()
             return JSONResponse({"ok": True, "ids": ids, "count": len(ids)})
 
         # Single insert: {...}
-        row_id = named_insert_metric(con, data)
+        row_id, stored = named_insert_metric(con, data)
+        analyze_and_store(con, row_id, stored, stored.get("segment_id"))
         con.commit()
         return JSONResponse({"ok": True, "id": row_id})
     finally:
@@ -383,9 +401,98 @@ async def latest() -> JSONResponse:
           ORDER BY id DESC
           LIMIT 200
         """).fetchall()
-        return JSONResponse({"rows": [dict(r) for r in rows]})
+        items = []
+        for r in rows:
+            item = dict(r)
+            payload = item.get("analysis_payload")
+            if isinstance(payload, str) and payload:
+                try:
+                    item["analysis_payload"] = json.loads(payload)
+                except Exception:
+                    pass
+            items.append(item)
+        return JSONResponse({"rows": items})
     finally:
         con.close()
+
+@app.get("/v1/events/latest")
+async def latest_events(limit: int = 200, segment_id: str = "") -> JSONResponse:
+    con = db()
+    try:
+        ensure_event_tables(con)
+        limit = max(10, min(1000, int(limit)))
+        segment_id = (segment_id or "").strip()
+        if segment_id:
+            rows = con.execute(
+                """
+                SELECT id, aggregate_id, segment_id, event_type, severity, score, status,
+                       reason, analysis_payload, created_at, updated_at
+                FROM road_events
+                WHERE segment_id = ?
+                ORDER BY created_at DESC
+                LIMIT ?
+                """,
+                (segment_id, limit),
+            ).fetchall()
+        else:
+            rows = con.execute(
+                """
+                SELECT id, aggregate_id, segment_id, event_type, severity, score, status,
+                       reason, analysis_payload, created_at, updated_at
+                FROM road_events
+                ORDER BY created_at DESC
+                LIMIT ?
+                """,
+                (limit,),
+            ).fetchall()
+        items = []
+        for r in rows:
+            item = dict(r)
+            payload = item.get("analysis_payload")
+            if isinstance(payload, str) and payload:
+                try:
+                    item["analysis_payload"] = json.loads(payload)
+                except Exception:
+                    pass
+            items.append(item)
+        return JSONResponse({"rows": items})
+    finally:
+        con.close()
+
+@app.post("/v1/admin/webhook/github")
+async def github_webhook(request: Request) -> JSONResponse:
+    if not GITHUB_WEBHOOK_SECRET:
+        raise HTTPException(status_code=500, detail="Webhook secret not configured")
+
+    body = await request.body()
+    signature = request.headers.get("x-hub-signature-256", "")
+    if not _verify_github_signature(GITHUB_WEBHOOK_SECRET, body, signature):
+        raise HTTPException(status_code=401, detail="Invalid signature")
+
+    event = (request.headers.get("x-github-event") or "").strip()
+    if event != "push":
+        return JSONResponse({"ok": True, "ignored": event})
+
+    try:
+        payload = json.loads(body.decode("utf-8"))
+    except Exception:
+        raise HTTPException(status_code=400, detail="Invalid JSON payload")
+
+    ref = payload.get("ref")
+    if ref != GITHUB_WEBHOOK_BRANCH:
+        return JSONResponse({"ok": True, "ignored": ref})
+
+    if not DEPLOY_SCRIPT:
+        raise HTTPException(status_code=500, detail="Deploy script not configured")
+
+    result = subprocess.run([DEPLOY_SCRIPT], check=False, capture_output=True, text=True)
+    if result.returncode != 0:
+        raise HTTPException(
+            status_code=500,
+            detail=f"Deploy failed: {result.returncode}",
+        )
+
+    return JSONResponse({"ok": True, "output": result.stdout.strip()})
 
 @app.get("/admin", response_class=HTMLResponse)
 async def admin_page(request: Request) -> HTMLResponse:
@@ -476,7 +583,7 @@ app.mount("/static", StaticFiles(directory=WEB_DIR), name="static")
 def health():
     return {"ok": True}
 
-import json, urllib.parse, urllib.request
+import urllib.parse, urllib.request
 
 def _ensure_geocode_tables(con: sqlite3.Connection) -> None:
     con.execute("""
@@ -637,7 +744,9 @@ async def verify_ingest(request: Request, payload: Dict[str, Any] = Body(...)) -
     con = db()
     try:
         ensure_tables(con)
-        row_id = named_insert_metric(con, dict(payload or {}))
+        data = dict(payload or {})
+        row_id, stored = named_insert_metric(con, data)
+        analyze_and_store(con, row_id, stored, stored.get("segment_id"))
         con.commit()
         return JSONResponse({"ok": True, "id": row_id})
     finally:
@@ -919,5 +1028,3 @@ async def map_points(
 
 
 app.mount("/", StaticFiles(directory=WEB_DIR, html=True), name="root")
-
-
