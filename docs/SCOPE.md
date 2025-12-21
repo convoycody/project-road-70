@@ -15,6 +15,9 @@
     - `DELETE /admin/api/rows/{row_id}`
     - `GET|POST /admin/api/backfill_geocode`
     - `GET|POST /admin/api/recompute_scores`
+  - Event and deploy endpoints:
+    - `GET /v1/events/latest`
+    - `POST /v1/admin/webhook/github`
 
 ## Core rule constraints (must remain true)
 - iPhone Safari web app (no App Store)
@@ -29,9 +32,9 @@
 - Table: `metric_aggregates`
   - ingestion accepts flexible field names via alias mapping
   - `sanitize_lat_lon()` enforces lat/lon sanity + annotates `quality_note`
+- Table: `road_events` (detected issues + analysis payloads)
 
 ## Operational goals for maintainers
 - Predictable deployment (systemd unit + venv)
 - Redacted infra snapshots committed for reproducibility
 - Clear runbook for onboarding and incident response
-
